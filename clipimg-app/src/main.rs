@@ -7,12 +7,13 @@ mod input;
 fn run_app() {
     use clipboard::ClipboardWatcher;
     use config::AppConfig;
-    use global_hotkey::{hotkey::HotKey, GlobalHotKeyEvent, GlobalHotKeyManager};
+    use global_hotkey::hotkey::HotKey;
+    use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
     use muda::{Menu, MenuItem, PredefinedMenuItem};
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
-    use tao::event_loop::EventLoopBuilder;
-    use tray_icon::{TrayIconBuilder, TrayIconEvent};
+    use tao::event_loop::{ControlFlow, EventLoop};
+    use tray_icon::TrayIconBuilder;
 
     env_logger::init();
 
@@ -40,7 +41,7 @@ fn run_app() {
         log::info!("启动清理: 已删除 {} 个过期图片", deleted);
     }
 
-    let event_loop = EventLoopBuilder::new().build();
+    let event_loop = EventLoop::new();
 
     // 注册全局热键
     let hotkey_manager = GlobalHotKeyManager::new().expect("无法创建热键管理器");
@@ -53,10 +54,10 @@ fn run_app() {
 
     // 系统托盘菜单
     let tray_menu = Menu::new();
-    let status_item = MenuItem::with_id("status", "clipImg 运行中", false, true);
-    let open_config = MenuItem::with_id("open_config", "打开配置文件", true, false);
-    let open_dir = MenuItem::with_id("open_dir", "打开图片目录", true, false);
-    let quit_item = MenuItem::with_id("quit", "退出", true, false);
+    let status_item = MenuItem::with_id("status", "clipImg 运行中", false, None);
+    let open_config = MenuItem::with_id("open_config", "打开配置文件", true, None);
+    let open_dir = MenuItem::with_id("open_dir", "打开图片目录", true, None);
+    let quit_item = MenuItem::with_id("quit", "退出", true, None);
 
     tray_menu
         .append_items(&[
@@ -72,7 +73,7 @@ fn run_app() {
     let _tray = TrayIconBuilder::new()
         .with_tooltip("clipImg - 剪贴板图片工具")
         .with_menu(Box::new(tray_menu))
-        .build(&event_loop)
+        .build()
         .expect("无法创建托盘图标");
 
     let mut clipboard = arboard::Clipboard::new().expect("无法访问剪贴板");
@@ -87,7 +88,7 @@ fn run_app() {
 
         // 热键事件
         if let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
-            if event.state == global_hotkey::hotkey::HotKeyState::Pressed {
+            if event.state == HotKeyState::Pressed {
                 let latest = config.latest_png_path(&exe_dir);
                 if latest.exists() {
                     if let Err(e) = input::send_text(&config.output_path) {
