@@ -1,0 +1,34 @@
+[package]
+name = "clipimg"
+version = "2.0.0"
+edition = "2021"
+description = "Clipboard image watcher + hotkey paste tool for Docker/WSL2 workflows"
+
+[dependencies]
+image = "0.25"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+md-5 = "0.10"
+log = "0.4"
+env_logger = "0.11"
+chrono = "0.4"
+
+# Windows-only 依赖
+[target.'cfg(target_os = "windows")'.dependencies]
+arboard = "3"
+global-hotkey = "0.6"
+tray-icon = "0.21"
+muda = "0.17"
+tao = "0.3"
+windows-sys = { version = "0.59", features = [
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1

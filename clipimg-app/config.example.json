@@ -1,0 +1,7 @@
+{
+  "hotkey": "Alt+Insert",
+  "output_path": "/workspace/.clip/latest.png",
+  "save_dir": ".clip",
+  "poll_interval_ms": 800,
+  "max_history_days": 7
+}

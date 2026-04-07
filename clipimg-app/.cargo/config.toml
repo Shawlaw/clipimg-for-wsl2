@@ -1,0 +1,4 @@
+# 交叉编译配置，仅在构建 Windows EXE 时使用
+# 用法: cargo xwin build --target x86_64-pc-windows-msvc --release
+#
+# 不设默认 target，以便在 Linux 上也能 cargo check/test
