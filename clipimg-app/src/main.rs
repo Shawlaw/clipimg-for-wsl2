@@ -141,7 +141,7 @@ fn run_app() {
                 let latest = config.latest_png_path(&exe_dir);
                 if latest.exists() {
                     log::info!("发送路径: {}", config.output_path);
-                    match input::send_text(&config.output_path) {
+                    match input::send_text(&mut clipboard, &config.output_path) {
                         Ok(()) => log::info!("路径已发送"),
                         Err(e) => log::error!("发送文本失败: {}", e),
                     }
