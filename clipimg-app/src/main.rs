@@ -5,6 +5,26 @@ mod input;
 mod logger;
 
 #[cfg(target_os = "windows")]
+fn fatal_error(msg: &str) -> ! {
+    eprintln!("clipImg 致命错误: {}", msg);
+    // 弹窗显示错误，防止闪退看不到
+    unsafe {
+        let wide: Vec<u16> = format!("clipImg 启动失败:\n\n{}", msg)
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let title: Vec<u16> = "clipImg 错误\0".encode_utf16().collect();
+        windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
+            std::ptr::null_mut(),
+            wide.as_ptr(),
+            title.as_ptr(),
+            0x10, // MB_ICONERROR
+        );
+    }
+    std::process::exit(1);
+}
+
+#[cfg(target_os = "windows")]
 fn run_app() {
     use clipboard::ClipboardWatcher;
     use config::AppConfig;
@@ -22,14 +42,16 @@ fn run_app() {
     // 加载配置
     let config = match AppConfig::load(&config_path) {
         Ok(c) => c,
-        Err(e) => {
-            eprintln!("加载配置失败: {}", e);
-            std::process::exit(1);
-        }
+        Err(e) => fatal_error(&format!("加载配置失败: {}", e)),
     };
 
-    // 初始化日志和 panic handler
+    // 先确保保存目录存在（日志文件要写到这里）
     let save_dir = config.resolved_save_dir(&exe_dir);
+    if let Err(e) = std::fs::create_dir_all(&save_dir) {
+        fatal_error(&format!("创建保存目录失败: {}\n目录: {}", e, save_dir.display()));
+    }
+
+    // 初始化日志和 panic handler
     let log_path = save_dir.join(".clipimg.log");
     logger::init(&log_path);
     logger::set_panic_hook(&log_path);
@@ -52,8 +74,7 @@ fn run_app() {
 
     let watcher = ClipboardWatcher::new(config.clone(), &exe_dir);
     if let Err(e) = watcher.ensure_dir() {
-        log::error!("创建保存目录失败: {}", e);
-        std::process::exit(1);
+        fatal_error(&format!("创建保存目录失败: {}", e));
     }
 
     let deleted = watcher.clean_old_files();
@@ -70,10 +91,7 @@ fn run_app() {
                 log::info!("热键管理器创建成功");
                 m
             }
-            Err(e) => {
-                log::error!("创建热键管理器失败: {:?}", e);
-                std::process::exit(1);
-            }
+            Err(e) => fatal_error(&format!("创建热键管理器失败: {:?}", e)),
         };
 
         let hotkey: HotKey = match HotKey::try_from(config.hotkey.clone()) {
@@ -81,19 +99,18 @@ fn run_app() {
                 log::info!("热键 '{}' 解析成功, id={:?}", config.hotkey, h.id());
                 h
             }
-            Err(e) => {
-                log::error!("解析热键 '{}' 失败: {:?}", config.hotkey, e);
-                log::error!("支持的格式示例: Alt+Insert, Ctrl+Shift+V, Super+V");
-                std::process::exit(1);
-            }
+            Err(e) => fatal_error(&format!(
+                "解析热键 '{}' 失败: {:?}\n支持格式: Alt+Insert, Ctrl+Shift+V, Super+V",
+                config.hotkey, e
+            )),
         };
 
         match mgr.register(hotkey) {
             Ok(()) => log::info!("热键已注册成功: {}", config.hotkey),
-            Err(e) => {
-                log::error!("注册热键失败: {:?}（可能被其他程序占用）", e);
-                std::process::exit(1);
-            }
+            Err(e) => fatal_error(&format!(
+                "注册热键失败: {:?}（可能被其他程序占用）",
+                e
+            )),
         }
 
         Some(mgr)
@@ -137,10 +154,7 @@ fn run_app() {
             log::info!("剪贴板访问初始化成功");
             c
         }
-        Err(e) => {
-            log::error!("无法访问剪贴板: {:?}", e);
-            std::process::exit(1);
-        }
+        Err(e) => fatal_error(&format!("无法访问剪贴板: {:?}", e)),
     };
 
     let poll_interval = Duration::from_millis(config.poll_interval_ms);

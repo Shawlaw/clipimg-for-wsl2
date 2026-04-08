@@ -1,5 +1,7 @@
 # clipImg — WSL2 / Docker 剪贴板图片工具
 
+> **v1.0.0**
+
 在 Windows 复制图片后，在 WSL2 终端（Claude Code CLI、Codex CLI 等）粘贴即可得到图片路径。
 
 ## 功能特性
@@ -142,6 +144,11 @@ clipimg-app/
 ---
 
 ## 故障排查
+
+**程序闪退 / 双击运行没反应**
+- 在 EXE 所在目录打开 PowerShell 或 cmd，执行 `.\clipimg.exe`，可以看到错误信息
+- 常见原因：`config.json` 格式错误、`save_dir` 路径无效、热键被占用
+- 程序启动后会生成日志文件 `<save_dir>/.clipimg.log`，可查看详细运行记录
 
 **截图后粘贴/按键没有路径**
 - 确认托盘图标存在
