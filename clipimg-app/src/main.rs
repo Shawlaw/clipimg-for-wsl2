@@ -19,7 +19,7 @@ fn run_app() {
     let exe_dir = get_exe_dir();
     let config_path = exe_dir.join("config.json");
 
-    // 加载配置（需要先加载才能知道 save_dir）
+    // 加载配置
     let config = match AppConfig::load(&config_path) {
         Ok(c) => c,
         Err(e) => {
@@ -34,11 +34,20 @@ fn run_app() {
     logger::init(&log_path);
     logger::set_panic_hook(&log_path);
 
+    let mode_name = if config.is_hotkey_mode() {
+        "热键模式 (方案 A)"
+    } else {
+        "多格式剪贴板模式 (方案 C)"
+    };
+
     log::info!("========== clipImg 启动 ==========");
+    log::info!("运行模式: {}", mode_name);
     log::info!("配置文件: {}", config_path.display());
     log::info!("保存目录: {}", save_dir.display());
     log::info!("日志文件: {}", log_path.display());
-    log::info!("热键: {}", config.hotkey);
+    if config.is_hotkey_mode() {
+        log::info!("热键: {}", config.hotkey);
+    }
     log::info!("输出路径: {}", config.output_path);
 
     let watcher = ClipboardWatcher::new(config.clone(), &exe_dir);
@@ -54,41 +63,54 @@ fn run_app() {
 
     let event_loop = EventLoop::new();
 
-    // 注册全局热键
-    let hotkey_manager = match GlobalHotKeyManager::new() {
-        Ok(m) => {
-            log::info!("热键管理器创建成功");
-            m
-        }
-        Err(e) => {
-            log::error!("创建热键管理器失败: {:?}", e);
-            std::process::exit(1);
-        }
-    };
+    // 仅在热键模式下注册全局热键
+    let hotkey_manager = if config.is_hotkey_mode() {
+        let mgr = match GlobalHotKeyManager::new() {
+            Ok(m) => {
+                log::info!("热键管理器创建成功");
+                m
+            }
+            Err(e) => {
+                log::error!("创建热键管理器失败: {:?}", e);
+                std::process::exit(1);
+            }
+        };
 
-    let hotkey: HotKey = match HotKey::try_from(config.hotkey.clone()) {
-        Ok(h) => {
-            log::info!("热键 '{}' 解析成功, id={:?}", config.hotkey, h.id());
-            h
-        }
-        Err(e) => {
-            log::error!("解析热键 '{}' 失败: {:?}", config.hotkey, e);
-            log::error!("支持的格式示例: Alt+Insert, Ctrl+Shift+V, Super+V");
-            std::process::exit(1);
-        }
-    };
+        let hotkey: HotKey = match HotKey::try_from(config.hotkey.clone()) {
+            Ok(h) => {
+                log::info!("热键 '{}' 解析成功, id={:?}", config.hotkey, h.id());
+                h
+            }
+            Err(e) => {
+                log::error!("解析热键 '{}' 失败: {:?}", config.hotkey, e);
+                log::error!("支持的格式示例: Alt+Insert, Ctrl+Shift+V, Super+V");
+                std::process::exit(1);
+            }
+        };
 
-    match hotkey_manager.register(hotkey) {
-        Ok(()) => log::info!("热键已注册成功: {}", config.hotkey),
-        Err(e) => {
-            log::error!("注册热键失败: {:?}（可能被其他程序占用）", e);
-            std::process::exit(1);
+        match mgr.register(hotkey) {
+            Ok(()) => log::info!("热键已注册成功: {}", config.hotkey),
+            Err(e) => {
+                log::error!("注册热键失败: {:?}（可能被其他程序占用）", e);
+                std::process::exit(1);
+            }
         }
-    }
+
+        Some(mgr)
+    } else {
+        log::info!("热键未配置，使用多格式剪贴板模式");
+        None
+    };
 
     // 系统托盘菜单
+    let mode_label = if config.is_hotkey_mode() {
+        format!("clipImg 运行中 [{}]", config.hotkey)
+    } else {
+        "clipImg 运行中 [剪贴板模式]".to_string()
+    };
+
     let tray_menu = Menu::new();
-    let status_item = MenuItem::with_id("status", "clipImg 运行中", false, None);
+    let status_item = MenuItem::with_id("status", &mode_label, false, None);
     let open_config = MenuItem::with_id("open_config", "打开配置文件", true, None);
     let open_dir = MenuItem::with_id("open_dir", "打开图片目录", true, None);
     let quit_item = MenuItem::with_id("quit", "退出", true, None);
@@ -128,25 +150,31 @@ fn run_app() {
     let exe_dir_clone = exe_dir.clone();
 
     log::info!("事件循环启动，开始监听剪贴板和热键");
-    log::info!("按 {} 输入图片路径", config.hotkey);
+    if config.is_hotkey_mode() {
+        log::info!("按 {} 输入图片路径", config.hotkey);
+    } else {
+        log::info!("截图后自动设置多格式剪贴板，在终端 Ctrl+V 粘贴即得到路径");
+    }
 
     event_loop.run(move |_event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
 
-        // 热键事件
-        if let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
-            log::debug!("收到热键事件: state={:?}", event.state);
-            if event.state == HotKeyState::Pressed {
-                log::info!("热键触发: {}", config.hotkey);
-                let latest = config.latest_png_path(&exe_dir);
-                if latest.exists() {
-                    log::info!("发送路径: {}", config.output_path);
-                    match input::send_text(&config.output_path) {
-                        Ok(()) => log::info!("路径已发送"),
-                        Err(e) => log::error!("发送文本失败: {}", e),
+        // 热键事件（仅模式 A）
+        if let Some(ref _mgr) = hotkey_manager {
+            if let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
+                log::debug!("收到热键事件: state={:?}", event.state);
+                if event.state == HotKeyState::Pressed {
+                    log::info!("热键触发: {}", config.hotkey);
+                    let latest = config.latest_png_path(&exe_dir);
+                    if latest.exists() {
+                        log::info!("发送路径: {}", config.output_path);
+                        match input::send_text_with_ime(&config.output_path) {
+                            Ok(()) => log::info!("路径已发送"),
+                            Err(e) => log::error!("发送文本失败: {}", e),
+                        }
+                    } else {
+                        log::warn!("latest.png 不存在，请先在 Windows 中复制图片");
                     }
-                } else {
-                    log::warn!("latest.png 不存在，请先在 Windows 中复制图片");
                 }
             }
         }
@@ -172,7 +200,18 @@ fn run_app() {
 
         // 剪贴板轮询
         if last_poll.elapsed() >= poll_interval {
-            watcher.poll(&mut clipboard);
+            let has_new = watcher.poll(&mut clipboard);
+            if has_new && !config.is_hotkey_mode() {
+                // 模式 C：新图片保存后，自动设置多格式剪贴板
+                let latest = config.latest_png_path(&exe_dir);
+                if latest.exists() {
+                    log::info!("设置多格式剪贴板...");
+                    match input::set_multi_format_clipboard(&config.output_path, &latest) {
+                        Ok(()) => log::info!("多格式剪贴板设置成功"),
+                        Err(e) => log::error!("多格式剪贴板设置失败: {}", e),
+                    }
+                }
+            }
             last_poll = Instant::now();
         }
     });
