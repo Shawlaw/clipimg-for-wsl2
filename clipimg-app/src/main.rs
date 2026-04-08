@@ -62,7 +62,8 @@ fn run_app() {
         "多格式剪贴板模式 (方案 C)"
     };
 
-    log::info!("========== clipImg 启动 ==========");
+    let version = env!("CARGO_PKG_VERSION");
+    log::info!("========== clipImg v{} 启动 ==========", version);
     log::info!("运行模式: {}", mode_name);
     log::info!("配置文件: {}", config_path.display());
     log::info!("保存目录: {}", save_dir.display());
@@ -121,9 +122,9 @@ fn run_app() {
 
     // 系统托盘菜单
     let mode_label = if config.is_hotkey_mode() {
-        format!("clipImg 运行中 [{}]", config.hotkey)
+        format!("clipImg v{} [{}]", version, config.hotkey)
     } else {
-        "clipImg 运行中 [剪贴板模式]".to_string()
+        format!("clipImg v{} [剪贴板模式]", version)
     };
 
     let tray_menu = Menu::new();
