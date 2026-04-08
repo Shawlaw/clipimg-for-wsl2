@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 struct FileAndConsoleLogger {
     file: Mutex<File>,
+    console_mode: bool,
 }
 
 impl log::Log for FileAndConsoleLogger {
@@ -29,10 +30,12 @@ impl log::Log for FileAndConsoleLogger {
         }
 
         // 写控制台（Error/Warn → stderr，其余 → stdout）
-        if record.level() <= log::Level::Warn {
-            eprintln!("{}", msg);
-        } else {
-            println!("{}", msg);
+        if self.console_mode {
+            if record.level() <= log::Level::Warn {
+                eprintln!("{}", msg);
+            } else {
+                println!("{}", msg);
+            }
         }
     }
 
@@ -45,7 +48,8 @@ impl log::Log for FileAndConsoleLogger {
 
 /// 初始化日志系统
 /// log_path: 日志文件路径（如 save_dir/.clipimg.log）
-pub fn init(log_path: &Path) {
+/// console_mode: 是否同时输出到控制台
+pub fn init(log_path: &Path, console_mode: bool) {
     let file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -54,6 +58,7 @@ pub fn init(log_path: &Path) {
 
     let logger = Box::new(FileAndConsoleLogger {
         file: Mutex::new(file),
+        console_mode,
     });
 
     log::set_boxed_logger(logger).expect("无法设置日志");

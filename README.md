@@ -1,6 +1,6 @@
 # clipImg — WSL2 / Docker 剪贴板图片工具
 
-> **v1.0.0**
+> **v1.0.1**
 
 在 Windows 复制图片后，在 WSL2 终端（Claude Code CLI、Codex CLI 等）粘贴即可得到图片路径。
 
@@ -10,10 +10,10 @@
 - **双模式输入**：
   - **剪贴板模式**（默认）：截图后自动设置多格式剪贴板，Ctrl+V / Shift+Insert 直接粘贴路径
   - **热键模式**：按自定义热键自动输入路径，不碰剪贴板
-- **系统托盘**：右键菜单可打开配置、打开图片目录、退出
+- **系统托盘**：右键菜单可打开配置/日志、打开图片目录、开机自启开关、退出
 - **智能去重**：文件大小 + MD5 两级去重，相同图片不重复保存
-- **历史清理**：自动清理超过指定天数的旧图片
-- **单 EXE**：无运行时依赖，1.9MB，双击即用
+- **历史清理**：自动清理超过指定小时数的旧图片（`latest.png` 始终保留）
+- **单 EXE**：无运行时依赖，1.9MB，双击即用（无控制台黑框）
 
 ---
 
@@ -35,7 +35,7 @@
   "output_path": "/workspace/.clip/latest.png",
   "save_dir": ".clip",
   "poll_interval_ms": 800,
-  "max_history_days": 7
+  "max_history_hours": 1
 }
 ```
 
@@ -60,7 +60,7 @@
 | `output_path` | `/workspace/.clip/latest.png` | 粘贴/输入到终端的路径（容器侧路径） |
 | `save_dir` | `.clip` | 图片在 Windows 侧的保存目录。相对路径基于 EXE 向上两级（`clipImg/clipimg-app/` → workspace root），也支持绝对路径如 `E:\workspace\.clip` |
 | `poll_interval_ms` | `800` | 剪贴板轮询间隔（毫秒） |
-| `max_history_days` | `7` | 历史图片最大保留天数 |
+| `max_history_hours` | `1` | 历史图片最大保留小时数（`latest.png` 始终保留） |
 
 两个路径的关系：`save_dir` 是 Windows 文件系统上的实际写入位置，`output_path` 是 WSL 容器内能识别的路径，两者通过目录挂载映射到同一个物理文件。
 
@@ -150,9 +150,10 @@ clipimg-app/
 ## 故障排查
 
 **程序闪退 / 双击运行没反应**
-- 在 EXE 所在目录打开 PowerShell 或 cmd，执行 `.\clipimg.exe`，可以看到错误信息
+- 启动失败时会弹窗显示错误信息（如配置文件格式错误、热键被占用等）
 - 常见原因：`config.json` 格式错误、`save_dir` 路径无效、热键被占用
-- 程序启动后会生成日志文件 `<save_dir>/.clipimg.log`，可查看详细运行记录
+- 程序启动后会生成日志文件 `<save_dir>/.clipimg.log`，可通过托盘菜单「打开日志文件」查看
+- 如需调试控制台输出，可用 `cargo build --features console` 编译带控制台的版本
 
 **截图后粘贴/按键没有路径**
 - 确认托盘图标存在

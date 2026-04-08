@@ -131,9 +131,9 @@ impl ClipboardWatcher {
         new_hash == latest_hash
     }
 
-    /// 清理超过 max_history_days 的历史图片
+    /// 清理超过 max_history_hours 的历史图片
     pub fn clean_old_files(&self) -> usize {
-        let max_days = self.config.max_history_days;
+        let max_hours = self.config.max_history_hours;
         let mut deleted = 0;
 
         let entries = match fs::read_dir(&self.save_dir) {
@@ -142,7 +142,7 @@ impl ClipboardWatcher {
         };
 
         let cutoff = std::time::SystemTime::now()
-            - std::time::Duration::from_secs(max_days as u64 * 24 * 3600);
+            - std::time::Duration::from_secs(max_hours as u64 * 3600);
 
         for entry in entries.flatten() {
             let path = entry.path();
@@ -235,7 +235,7 @@ mod tests {
             let save_path = dir.path().join(".clip");
             let config = AppConfig {
                 save_dir: save_path.to_str().unwrap().to_string(),
-                max_history_days: 7,
+                max_history_hours: 1,
                 ..Default::default()
             };
             Self { dir, config }
@@ -436,5 +436,39 @@ mod tests {
     #[test]
     fn test_file_md5_missing() {
         assert!(file_md5(Path::new("/nonexistent")).is_none());
+    }
+
+    #[test]
+    fn test_clean_old_files_by_hours() {
+        let env = TestEnv::new();
+        let clip_dir = env.dir.path().join(".clip");
+        fs::create_dir_all(&clip_dir).unwrap();
+
+        // 创建一个过期的文件（修改时间设为 2 小时前）
+        let old_path = clip_dir.join("clip_20260407_100000.png");
+        let img = RgbaImage::from_pixel(10, 10, Rgba([255, 0, 0, 255]));
+        img.save_with_format(&old_path, ImageFormat::Png).unwrap();
+
+        // 将修改时间设为 2 小时前
+        let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+        let _ = std::fs::File::open(&old_path).and_then(|f| f.set_modified(two_hours_ago));
+
+        // 创建一个新文件（不会过期）
+        let new_path = clip_dir.join("clip_20260408_120000.png");
+        let img2 = RgbaImage::from_pixel(10, 10, Rgba([0, 255, 0, 255]));
+        img2.save_with_format(&new_path, ImageFormat::Png).unwrap();
+
+        // latest.png 应该保留
+        let latest = clip_dir.join("latest.png");
+        let img3 = RgbaImage::from_pixel(10, 10, Rgba([0, 0, 255, 255]));
+        img3.save_with_format(&latest, ImageFormat::Png).unwrap();
+
+        let watcher = env.watcher();
+        let deleted = watcher.clean_old_files();
+
+        assert_eq!(deleted, 1, "应该只删除 1 个过期文件");
+        assert!(!old_path.exists(), "过期文件应被删除");
+        assert!(new_path.exists(), "未过期文件应保留");
+        assert!(latest.exists(), "latest.png 应始终保留");
     }
 }

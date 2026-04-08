@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+fn default_max_history_hours() -> u32 { 1 }
+
 /// 应用配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -12,8 +14,9 @@ pub struct AppConfig {
     pub save_dir: String,
     /// 剪贴板轮询间隔（毫秒）
     pub poll_interval_ms: u64,
-    /// 历史图片最大保留天数
-    pub max_history_days: u32,
+    /// 历史图片最大保留小时数
+    #[serde(default = "default_max_history_hours")]
+    pub max_history_hours: u32,
 }
 
 impl Default for AppConfig {
@@ -23,7 +26,7 @@ impl Default for AppConfig {
             output_path: "/workspace/.clip/latest.png".to_string(),
             save_dir: ".clip".to_string(),
             poll_interval_ms: 800,
-            max_history_days: 7,
+            max_history_hours: 1,
         }
     }
 }
@@ -124,7 +127,7 @@ mod tests {
         assert_eq!(config.output_path, "/workspace/.clip/latest.png");
         assert_eq!(config.save_dir, ".clip");
         assert_eq!(config.poll_interval_ms, 800);
-        assert_eq!(config.max_history_days, 7);
+        assert_eq!(config.max_history_hours, 1);
     }
 
     #[test]
@@ -239,5 +242,40 @@ mod tests {
         let exe_dir = Path::new("/workspace/clipImg/clipimg-app");
         let tmp = config.tmp_png_path(exe_dir);
         assert_eq!(tmp, PathBuf::from("/workspace/.clip/_tmp_clip.png"));
+    }
+
+    #[test]
+    fn test_load_old_config_missing_max_history_hours() {
+        // 模拟旧配置文件（有 max_history_days 但没有 max_history_hours）
+        let dir = temp_dir();
+        let config_path = dir.path().join("config.json");
+        let old_json = r#"{
+            "hotkey": "",
+            "output_path": "/workspace/.clip/latest.png",
+            "save_dir": ".clip",
+            "poll_interval_ms": 800,
+            "max_history_days": 7
+        }"#;
+        fs::write(&config_path, old_json).unwrap();
+
+        let config = AppConfig::load(&config_path).unwrap();
+        assert_eq!(config.max_history_hours, 1, "缺失 max_history_hours 应使用默认值 1");
+    }
+
+    #[test]
+    fn test_load_config_with_max_history_hours() {
+        let dir = temp_dir();
+        let config_path = dir.path().join("config.json");
+        let json = r#"{
+            "hotkey": "",
+            "output_path": "/workspace/.clip/latest.png",
+            "save_dir": ".clip",
+            "poll_interval_ms": 800,
+            "max_history_hours": 4
+        }"#;
+        fs::write(&config_path, json).unwrap();
+
+        let config = AppConfig::load(&config_path).unwrap();
+        assert_eq!(config.max_history_hours, 4);
     }
 }

@@ -1,3 +1,11 @@
+// Windows 子系统：默认 WINDOWS（无控制台），编译时启用 console feature 保留控制台
+// 注意：必须在 non-windows 平台不设置，否则编译失败
+#![cfg_attr(all(target_os = "windows", not(feature = "console")), windows_subsystem = "windows")]
+
+fn main() {
+    run_app();
+}
+
 mod clipboard;
 mod config;
 #[cfg(target_os = "windows")]
@@ -25,6 +33,11 @@ fn fatal_error(msg: &str) -> ! {
 }
 
 #[cfg(target_os = "windows")]
+fn is_console_mode() -> bool {
+    cfg!(feature = "console") || std::env::args().any(|a| a == "--console")
+}
+
+#[cfg(target_os = "windows")]
 fn run_app() {
     use clipboard::ClipboardWatcher;
     use config::AppConfig;
@@ -34,6 +47,9 @@ fn run_app() {
     use std::time::{Duration, Instant};
     use tao::event_loop::{ControlFlow, EventLoop};
     use tray_icon::TrayIconBuilder;
+
+    // --console 模式：附加控制台用于看日志输出
+    let console_mode = is_console_mode();
 
     // 先确定路径
     let exe_dir = get_exe_dir();
@@ -53,7 +69,7 @@ fn run_app() {
 
     // 初始化日志和 panic handler
     let log_path = save_dir.join(".clipimg.log");
-    logger::init(&log_path);
+    logger::init(&log_path, console_mode);
     logger::set_panic_hook(&log_path);
 
     let mode_name = if config.is_hotkey_mode() {
@@ -65,6 +81,9 @@ fn run_app() {
     let version = env!("CARGO_PKG_VERSION");
     log::info!("========== clipImg v{} 启动 ==========", version);
     log::info!("运行模式: {}", mode_name);
+    if console_mode {
+        log::info!("控制台模式: 已启用 (--console)");
+    }
     log::info!("配置文件: {}", config_path.display());
     log::info!("保存目录: {}", save_dir.display());
     log::info!("日志文件: {}", log_path.display());
@@ -120,6 +139,10 @@ fn run_app() {
         None
     };
 
+    // 开机自启状态
+    let autostart_enabled = is_autostart_enabled();
+    log::info!("开机自启: {}", if autostart_enabled { "已启用" } else { "未启用" });
+
     // 系统托盘菜单
     let mode_label = if config.is_hotkey_mode() {
         format!("clipImg v{} [{}]", version, config.hotkey)
@@ -129,23 +152,28 @@ fn run_app() {
 
     let tray_menu = Menu::new();
     let status_item = MenuItem::with_id("status", &mode_label, false, None);
+    let open_log = MenuItem::with_id("open_log", "打开日志文件", true, None);
     let open_config = MenuItem::with_id("open_config", "打开配置文件", true, None);
     let open_dir = MenuItem::with_id("open_dir", "打开图片目录", true, None);
+    let autostart_item = MenuItem::with_id("autostart", "开机自启", autostart_enabled, None);
     let quit_item = MenuItem::with_id("quit", "退出", true, None);
 
     tray_menu
         .append_items(&[
             &status_item,
             &PredefinedMenuItem::separator(),
+            &open_log,
             &open_config,
             &open_dir,
+            &PredefinedMenuItem::separator(),
+            &autostart_item,
             &PredefinedMenuItem::separator(),
             &quit_item,
         ])
         .unwrap();
 
     let _tray = TrayIconBuilder::new()
-        .with_tooltip("clipImg - 剪贴板图片工具")
+        .with_tooltip(&format!("clipImg v{}", version))
         .with_menu(Box::new(tray_menu))
         .build()
         .expect("无法创建托盘图标");
@@ -198,12 +226,18 @@ fn run_app() {
         if let Ok(event) = muda::MenuEvent::receiver().try_recv() {
             log::debug!("菜单事件: id={}", event.id().as_ref());
             match event.id().as_ref() {
+                "open_log" => {
+                    let _ = std::process::Command::new("notepad").arg(&log_path).spawn();
+                }
                 "open_config" => {
                     let _ = std::process::Command::new("explorer").arg(&config_path).spawn();
                 }
                 "open_dir" => {
                     let dir = config_clone.resolved_save_dir(&exe_dir_clone);
                     let _ = std::process::Command::new("explorer").arg(dir).spawn();
+                }
+                "autostart" => {
+                    toggle_autostart();
                 }
                 "quit" => {
                     log::info!("用户选择退出");
@@ -245,6 +279,114 @@ fn get_exe_dir() -> std::path::PathBuf {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
 }
 
-fn main() {
-    run_app();
+// ============================================================
+// 开机自启：读写注册表 HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+// ============================================================
+
+#[cfg(target_os = "windows")]
+fn is_autostart_enabled() -> bool {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    let exe_path = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+
+    let key = r"Software\Microsoft\Windows\CurrentVersion\Run";
+    let value_name: Vec<u16> = OsStr::new("clipImg").encode_wide().chain(std::iter::once(0)).collect();
+
+    let mut buf = [0u16; 512];
+    let mut buf_len = (buf.len() * 2) as u32;
+
+    let result = unsafe {
+        windows_sys::Win32::System::Registry::RegGetValueW(
+            0x80000001 as *mut std::ffi::c_void, // HKCU
+            OsStr::new(key).encode_wide().chain(std::iter::once(0)).collect::<Vec<u16>>().as_ptr(),
+            value_name.as_ptr(),
+            0x00020002, // RRF_RT_REG_SZ
+            std::ptr::null_mut(),
+            buf.as_mut_ptr() as *mut _,
+            &mut buf_len,
+        )
+    };
+
+    if result != 0 {
+        return false;
+    }
+
+    let stored: String = buf[..(buf_len as usize / 2 - 1)].iter().map(|&c| c as u8 as char).collect();
+    let exe_str = exe_path.to_str().unwrap_or("");
+    stored.contains(exe_str)
+}
+
+#[cfg(target_os = "windows")]
+fn toggle_autostart() {
+    let currently_enabled = is_autostart_enabled();
+
+    if currently_enabled {
+        // 禁用：删除注册表值
+        remove_autostart();
+    } else {
+        // 启用：写入注册表值
+        set_autostart();
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn set_autostart() {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    let exe_path = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => { log::error!("获取 EXE 路径失败: {}", e); return; }
+    };
+
+    let value: String = format!("\"{}\"", exe_path.display());
+    let value_wide: Vec<u16> = OsStr::new(&value).encode_wide().chain(std::iter::once(0)).collect();
+    let key_wide: Vec<u16> = OsStr::new(r"Software\Microsoft\Windows\CurrentVersion\Run")
+        .encode_wide().chain(std::iter::once(0)).collect();
+    let name_wide: Vec<u16> = OsStr::new("clipImg").encode_wide().chain(std::iter::once(0)).collect();
+
+    let result = unsafe {
+        windows_sys::Win32::System::Registry::RegSetKeyValueW(
+            0x80000001 as *mut std::ffi::c_void, // HKCU
+            key_wide.as_ptr(),
+            name_wide.as_ptr(),
+            1, // REG_SZ
+            value_wide.as_ptr() as *const _,
+            (value_wide.len() * 2) as u32,
+        )
+    };
+
+    if result == 0 {
+        log::info!("开机自启已启用");
+    } else {
+        log::error!("设置开机自启失败: 错误码 {}", result);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn remove_autostart() {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    let key_wide: Vec<u16> = OsStr::new(r"Software\Microsoft\Windows\CurrentVersion\Run")
+        .encode_wide().chain(std::iter::once(0)).collect();
+    let name_wide: Vec<u16> = OsStr::new("clipImg").encode_wide().chain(std::iter::once(0)).collect();
+
+    let result = unsafe {
+        windows_sys::Win32::System::Registry::RegDeleteKeyValueW(
+            0x80000001 as *mut std::ffi::c_void, // HKCU
+            key_wide.as_ptr(),
+            name_wide.as_ptr(),
+        )
+    };
+
+    if result == 0 {
+        log::info!("开机自启已禁用");
+    } else {
+        log::error!("移除开机自启失败: 错误码 {}", result);
+    }
 }
