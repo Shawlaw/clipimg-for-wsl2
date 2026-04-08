@@ -19,7 +19,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            hotkey: "Alt+Insert".to_string(),
+            hotkey: "".to_string(),
             output_path: "/workspace/.clip/latest.png".to_string(),
             save_dir: ".clip".to_string(),
             poll_interval_ms: 800,
@@ -120,7 +120,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = AppConfig::default();
-        assert_eq!(config.hotkey, "Alt+Insert");
+        assert_eq!(config.hotkey, "");
         assert_eq!(config.output_path, "/workspace/.clip/latest.png");
         assert_eq!(config.save_dir, ".clip");
         assert_eq!(config.poll_interval_ms, 800);
@@ -148,7 +148,7 @@ mod tests {
 
         let config = AppConfig::load(&config_path).unwrap();
         assert!(config_path.exists());
-        assert_eq!(config.hotkey, "Alt+Insert");
+        assert_eq!(config.hotkey, "");
     }
 
     #[test]
@@ -172,11 +172,11 @@ mod tests {
     #[test]
     fn test_is_hotkey_mode() {
         let config = AppConfig::default();
-        assert!(config.is_hotkey_mode());
+        assert!(!config.is_hotkey_mode()); // 默认是剪贴板模式
 
-        let mut config_no_hotkey = AppConfig::default();
-        config_no_hotkey.hotkey = "".to_string();
-        assert!(!config_no_hotkey.is_hotkey_mode());
+        let mut config_with_hotkey = AppConfig::default();
+        config_with_hotkey.hotkey = "Alt+Insert".to_string();
+        assert!(config_with_hotkey.is_hotkey_mode());
     }
 
     #[test]
