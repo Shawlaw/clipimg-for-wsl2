@@ -57,9 +57,7 @@ impl AppConfig {
 
     /// 校验配置合法性
     pub fn validate(&self) -> Result<(), String> {
-        if self.hotkey.trim().is_empty() {
-            return Err("hotkey 不能为空".to_string());
-        }
+        // hotkey 为空表示使用多格式剪贴板模式（方案 C），是合法的
         if self.output_path.trim().is_empty() {
             return Err("output_path 不能为空".to_string());
         }
@@ -70,6 +68,11 @@ impl AppConfig {
             return Err("poll_interval_ms 不能为 0".to_string());
         }
         Ok(())
+    }
+
+    /// 是否使用热键模式（方案 A）
+    pub fn is_hotkey_mode(&self) -> bool {
+        !self.hotkey.trim().is_empty()
     }
 
     /// 解析 save_dir 为绝对路径
@@ -159,10 +162,21 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_empty_hotkey() {
+    fn test_validate_empty_hotkey_is_ok() {
         let mut config = AppConfig::default();
         config.hotkey = "".to_string();
-        assert!(config.validate().is_err());
+        assert!(config.validate().is_ok()); // 空 hotkey 表示方案 C
+        assert!(!config.is_hotkey_mode());
+    }
+
+    #[test]
+    fn test_is_hotkey_mode() {
+        let config = AppConfig::default();
+        assert!(config.is_hotkey_mode());
+
+        let mut config_no_hotkey = AppConfig::default();
+        config_no_hotkey.hotkey = "".to_string();
+        assert!(!config_no_hotkey.is_hotkey_mode());
     }
 
     #[test]
