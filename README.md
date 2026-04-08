@@ -122,7 +122,9 @@ clipimg-app/
 │   ├── input.rs            # 路径输入：热键模式（SendInput + IME 切换）+ 剪贴板模式（多格式设置）
 │   └── logger.rs           # 文件 + 控制台双写日志 + panic handler
 ├── Cargo.toml
-└── config.example.json
+├── config.example.json
+└── plans/                  # 方案设计文档
+    └── plan0407_v1.md
 ```
 
 ---
@@ -137,9 +139,11 @@ clipimg-app/
 
 ---
 
-## 经典方案（仍可用）
+## 经典方案（PowerShell + AutoHotkey）
 
-项目中仍保留了早期的 PowerShell + AutoHotkey 方案，位于 `windows-setup/` 目录。功能相同但需要分别启动两个进程、安装 AutoHotkey。新用户建议使用 Rust 单 EXE 方案。
+早期的 PowerShell 守护进程 + AutoHotkey 热键脚本方案已从主分支移除。如需使用该方案，可查看历史提交 [`ac7ccb6`](https://github.com/Shawlaw/clipimg-for-wsl2/tree/ac7ccb6)，其中包含完整的源码、安装步骤和使用说明。
+
+该方案需要分别启动两个进程（PowerShell 守护进程 + AutoHotkey 脚本），并依赖 AutoHotkey 运行时。新用户建议直接使用当前的 Rust 单 EXE 方案。
 
 ---
 
