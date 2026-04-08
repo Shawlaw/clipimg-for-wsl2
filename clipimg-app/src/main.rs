@@ -13,6 +13,9 @@ mod input;
 mod logger;
 
 #[cfg(target_os = "windows")]
+mod first_run;
+
+#[cfg(target_os = "windows")]
 fn fatal_error(msg: &str) -> ! {
     eprintln!("clipImg 致命错误: {}", msg);
     // 弹窗显示错误，防止闪退看不到
@@ -55,10 +58,34 @@ fn run_app() {
     let exe_dir = get_exe_dir();
     let config_path = exe_dir.join("config.json");
 
-    // 加载配置
-    let config = match AppConfig::load(&config_path) {
-        Ok(c) => c,
-        Err(e) => fatal_error(&format!("加载配置失败: {}", e)),
+    // 加载配置（首次运行弹出路径确认对话框）
+    let config = if !config_path.exists() {
+        let default_cfg = AppConfig::default();
+        let resolved = default_cfg.resolved_save_dir(&exe_dir);
+        let resolved_str = resolved.to_str().unwrap_or("").to_string();
+
+        match first_run::confirm_save_dir(&resolved_str) {
+            Some(user_path) => {
+                let mut cfg = default_cfg;
+                // 如果用户修改了路径，保存新路径
+                if user_path != resolved_str {
+                    cfg.save_dir = user_path;
+                }
+                if let Err(e) = cfg.save(&config_path) {
+                    fatal_error(&format!("保存配置失败: {}", e));
+                }
+                cfg
+            }
+            None => {
+                // 用户取消，退出
+                std::process::exit(0);
+            }
+        }
+    } else {
+        match AppConfig::load(&config_path) {
+            Ok(c) => c,
+            Err(e) => fatal_error(&format!("加载配置失败: {}", e)),
+        }
     };
 
     // 先确保保存目录存在（日志文件要写到这里）
@@ -172,8 +199,18 @@ fn run_app() {
         ])
         .unwrap();
 
+    // 加载托盘图标
+    let tray_icon = {
+        let icon_data = include_bytes!("../icons/icon_32.png");
+        let img = image::load_from_memory(icon_data).expect("无法加载图标");
+        let rgba = img.to_rgba8();
+        tray_icon::Icon::from_rgba(rgba.to_vec(), rgba.width(), rgba.height())
+            .expect("无法创建图标对象")
+    };
+
     let _tray = TrayIconBuilder::new()
         .with_tooltip(&format!("clipImg v{}", version))
+        .with_icon(tray_icon)
         .with_menu(Box::new(tray_menu))
         .build()
         .expect("无法创建托盘图标");

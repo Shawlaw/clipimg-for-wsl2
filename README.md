@@ -27,7 +27,7 @@
 
 双击 `clipimg.exe`，任务栏出现托盘图标即表示运行中。
 
-首次运行会在 EXE 同目录自动生成 `config.json`：
+首次运行会弹出路径确认对话框，确认图片保存目录后自动生成 `config.json`：
 
 ```json
 {
@@ -120,11 +120,15 @@ clipimg-app/
 │   ├── config.rs           # 配置文件加载/保存/校验
 │   ├── clipboard.rs        # 剪贴板轮询 + 图片保存 + MD5 去重 + 历史清理
 │   ├── input.rs            # 路径输入：热键模式（SendInput + IME 切换）+ 剪贴板模式（多格式设置）
+│   ├── first_run.rs        # 首次运行路径确认对话框（Win32 内存对话框）
 │   └── logger.rs           # 文件 + 控制台双写日志 + panic handler
+├── icons/                  # 应用图标（生成工具见 examples/gen_icon.rs）
+├── examples/
+│   └── gen_icon.rs         # 图标生成工具
 ├── Cargo.toml
-├── config.example.json
-└── plans/                  # 方案设计文档
-    └── plan0407_v1.md
+├── build.rs                # Windows 资源编译（EXE 图标）
+├── resource.rc             # Windows 资源定义
+└── config.example.json
 ```
 
 ---
