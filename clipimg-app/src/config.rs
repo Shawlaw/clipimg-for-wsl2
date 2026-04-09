@@ -87,18 +87,13 @@ impl AppConfig {
     }
 
     /// 解析 save_dir 为绝对路径
-    /// 相对路径基于 workspace 根目录（EXE 向上两级）
+    /// 相对路径基于 EXE 所在目录
     pub fn resolved_save_dir(&self, exe_dir: &Path) -> PathBuf {
         let save = Path::new(&self.save_dir);
         if save.is_absolute() || is_windows_absolute(&self.save_dir) {
             save.to_path_buf()
         } else {
-            // EXE 在 clipImg/clipimg-app/ → workspace root 是上两级
-            let workspace = exe_dir
-                .parent() // clipimg-app/ → clipImg/
-                .and_then(|p| p.parent()) // clipImg/ → workspace/
-                .unwrap_or(exe_dir);
-            workspace.join(&self.save_dir)
+            exe_dir.join(&self.save_dir)
         }
     }
 
@@ -210,10 +205,10 @@ mod tests {
             save_dir: ".clip".to_string(),
             ..Default::default()
         };
-        // 模拟 EXE 在 /some/path/clipImg/clipimg-app/
-        let exe_dir = Path::new("/some/path/clipImg/clipimg-app");
+        // 相对路径基于 EXE 所在目录
+        let exe_dir = Path::new("/some/path/clipImg");
         let resolved = config.resolved_save_dir(exe_dir);
-        assert_eq!(resolved, PathBuf::from("/some/path/.clip"));
+        assert_eq!(resolved, PathBuf::from("/some/path/clipImg/.clip"));
     }
 
     #[test]
@@ -236,9 +231,9 @@ mod tests {
             save_dir: ".clip".to_string(),
             ..Default::default()
         };
-        let exe_dir = Path::new("/workspace/clipImg/clipimg-app");
+        let exe_dir = Path::new("/workspace/clipImg");
         let latest = config.latest_png_path(exe_dir);
-        assert_eq!(latest, PathBuf::from("/workspace/.clip/latest.png"));
+        assert_eq!(latest, PathBuf::from("/workspace/clipImg/.clip/latest.png"));
     }
 
     #[test]
@@ -247,9 +242,9 @@ mod tests {
             save_dir: ".clip".to_string(),
             ..Default::default()
         };
-        let exe_dir = Path::new("/workspace/clipImg/clipimg-app");
+        let exe_dir = Path::new("/workspace/clipImg");
         let tmp = config.tmp_png_path(exe_dir);
-        assert_eq!(tmp, PathBuf::from("/workspace/.clip/_tmp_clip.png"));
+        assert_eq!(tmp, PathBuf::from("/workspace/clipImg/.clip/_tmp_clip.png"));
     }
 
     #[test]

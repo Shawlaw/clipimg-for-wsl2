@@ -5,6 +5,53 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// 从 Unix epoch 天数计算年月日
+pub fn days_to_ymd(mut days: i64) -> (u32, u32, u32) {
+    let mut y = 1970i64;
+    loop {
+        let dy = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
+        if days < dy { break; }
+        days -= dy;
+        y += 1;
+    }
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let md: &[u32] = if leap { &[31,29,31,30,31,30,31,31,30,31,30,31] } else { &[31,28,31,30,31,30,31,31,30,31,30,31] };
+    let mut m = 0u32;
+    for (i, &d) in md.iter().enumerate() {
+        if days < d as i64 { m = i as u32 + 1; break; }
+        days -= d as i64;
+    }
+    if m == 0 { m = 12; }
+    (y as u32, m, days as u32 + 1)
+}
+
+/// 当前本地时间格式化为 YYYY-MM-DD HH:MM:SS（UTC+8）
+fn now_timestamp() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let local_secs = secs + 8 * 3600;
+    let days = local_secs / 86400;
+    let tod = local_secs % 86400;
+    let (y, mo, d) = days_to_ymd(days as i64);
+    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, tod / 3600, (tod % 3600) / 60, tod % 60)
+}
+
+/// 当前本地时间格式化为 YYYYMMDD_HHmmSS（用于文件名）
+pub fn filename_timestamp() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let local_secs = secs + 8 * 3600;
+    let days = local_secs / 86400;
+    let tod = local_secs % 86400;
+    let (y, mo, d) = days_to_ymd(days as i64);
+    format!("{:04}{:02}{:02}_{:02}{:02}{:02}", y, mo, d, tod / 3600, (tod % 3600) / 60, tod % 60)
+}
 
 struct FileAndConsoleLogger {
     file: Mutex<File>,
@@ -20,7 +67,7 @@ impl log::Log for FileAndConsoleLogger {
         if !self.enabled(record.metadata()) {
             return;
         }
-        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        let timestamp = now_timestamp();
         let msg = format!("[{} {}] {}", timestamp, record.level(), record.args());
 
         // 写文件
@@ -69,7 +116,7 @@ pub fn init(log_path: &Path, console_mode: bool) {
 pub fn set_panic_hook(log_path: &Path) {
     let log_path = log_path.to_path_buf();
     std::panic::set_hook(Box::new(move |info| {
-        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        let timestamp = now_timestamp();
         let msg = format!("[{} ERROR] PANIC: {}", timestamp, info);
 
         // 尝试写到日志文件

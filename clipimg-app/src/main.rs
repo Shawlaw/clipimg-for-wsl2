@@ -182,6 +182,7 @@ fn run_app() {
     let open_log = MenuItem::with_id("open_log", "打开日志文件", true, None);
     let open_config = MenuItem::with_id("open_config", "打开配置文件", true, None);
     let open_dir = MenuItem::with_id("open_dir", "打开图片目录", true, None);
+    let homepage = MenuItem::with_id("homepage", "项目主页", true, None);
     let autostart_item = CheckMenuItem::with_id("autostart", "开机自启", true, autostart_enabled, None);
     let quit_item = MenuItem::with_id("quit", "退出", true, None);
 
@@ -192,6 +193,7 @@ fn run_app() {
             &open_log,
             &open_config,
             &open_dir,
+            &homepage,
             &PredefinedMenuItem::separator(),
             &autostart_item,
             &PredefinedMenuItem::separator(),
@@ -272,6 +274,11 @@ fn run_app() {
                 "open_dir" => {
                     let dir = config_clone.resolved_save_dir(&exe_dir_clone);
                     let _ = std::process::Command::new("explorer").arg(dir).spawn();
+                }
+                "homepage" => {
+                    let _ = std::process::Command::new("cmd")
+                        .args(["/c", "start", "https://github.com/Shawlaw/clipimg-for-wsl2"])
+                        .spawn();
                 }
                 "autostart" => {
                     toggle_autostart();

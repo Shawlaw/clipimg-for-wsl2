@@ -1,16 +1,15 @@
 [package]
 name = "clipimg"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 description = "Clipboard image watcher + hotkey paste tool for Docker/WSL2 workflows"
 
 [dependencies]
-image = "0.25"
+image = { version = "0.25", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 md-5 = "0.10"
 log = { version = "0.4", features = ["std"] }
-chrono = "0.4"
 
 # Windows-only 依赖
 [target.'cfg(target_os = "windows")'.dependencies]

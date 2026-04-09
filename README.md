@@ -6,7 +6,7 @@
 
 <p align="center">WSL2 / Docker 剪贴板图片工具</p>
 
-> 当前版本：**v1.0.1**
+> 当前版本：**v1.0.2**
 
 在 Windows 截取图片后（目前自测PrintScreen键系统级截屏、QQ快捷键截屏、微信快捷键截屏均有效），在 WSL2 终端（Claude Code CLI、Codex CLI 等）里粘贴即可让多模态模型“看到”图片。
 
@@ -19,7 +19,7 @@
 - **系统托盘**：右键菜单可打开配置/日志、打开图片目录、开机自启开关、退出
 - **智能去重**：文件大小 + MD5 两级去重，相同图片不重复保存
 - **历史清理**：自动清理超过指定小时数的旧图片（`latest.png` 始终保留）
-- **单 EXE**：无运行时依赖，1.9MB，双击即用（无控制台黑框）
+- **单 EXE**：无运行时依赖，不到 1MB，双击即用（无控制台黑框）
 
 ---
 
@@ -64,11 +64,11 @@
 |------|--------|------|
 | `hotkey` | `""` | 全局热键。**空字符串 = 剪贴板模式**，设置值则启用热键模式（如 `"Alt+Insert"`、`"Ctrl+Shift+V"`） |
 | `output_path` | `/workspace/.clip/latest.png` | 粘贴/输入到终端的路径（容器侧路径） |
-| `save_dir` | `.clip` | 图片在 Windows 侧的保存目录。相对路径基于 EXE 向上两级（`clipImg/clipimg-app/` → workspace root），也支持绝对路径如 `E:\workspace\.clip` |
+| `save_dir` | `.clip` | 图片在 Windows 侧的保存目录。相对路径基于 EXE 所在目录，也支持绝对路径（需转义符号"\\"）如 `E:\\workspace\\.clip` |
 | `poll_interval_ms` | `800` | 剪贴板轮询间隔（毫秒） |
 | `max_history_hours` | `1` | 历史图片最大保留小时数（`latest.png` 始终保留） |
 
-两个路径的关系：`save_dir` 是 Windows 文件系统上的实际写入位置，`output_path` 是 WSL 容器内能识别的路径，两者通过目录挂载映射到同一个物理文件。
+**两个路径的关系：`save_dir` 是 Windows 文件系统上的实际写入位置，`output_path` 是 WSL 容器内能识别的路径，两者通过目录挂载映射到同一个物理文件。**
 
 ---
 
@@ -106,7 +106,7 @@ cargo install cargo-xwin
 cd clipimg-app/
 cargo xwin build --target x86_64-pc-windows-msvc --release
 
-# 产出: target/x86_64-pc-windows-msvc/release/clipimg.exe (~1.9MB)
+# 产出: target/x86_64-pc-windows-msvc/release/clipimg.exe (<1MB)
 ```
 
 也可以在 Windows 上直接编译：
@@ -186,6 +186,12 @@ clipimg-app/
 ---
 
 ## 版本记录
+
+### v1.0.2
+
+- EXE 体积从 2.0MB 缩减至不到 1MB（image crate 只保留 PNG 编解码，移除 chrono 依赖）
+- save_dir 路径解析简化：相对路径直接基于 EXE 所在目录，不再向上跳两级
+- 托盘菜单新增「项目主页」选项，点击打开 GitHub 仓库地址
 
 ### v1.0.1
 

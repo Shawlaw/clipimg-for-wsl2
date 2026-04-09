@@ -1,5 +1,5 @@
 use crate::config::AppConfig;
-use chrono::Local;
+use crate::logger::filename_timestamp;
 use image::ImageFormat;
 use md5::{Digest, Md5};
 use std::fs;
@@ -44,7 +44,7 @@ impl ClipboardWatcher {
             return false;
         }
 
-        let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
+        let timestamp = filename_timestamp();
         let history_path = self.unique_history_path(&timestamp);
 
         if let Err(e) = fs::rename(&tmp_path, &history_path) {
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_naming_format() {
-        let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
+        let timestamp = filename_timestamp();
         let name = format!("clip_{}.png", timestamp);
         assert!(name.starts_with("clip_"));
         assert!(name.ends_with(".png"));
