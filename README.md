@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="clipimg-app/icons/icon_128.png" width="64">
+  <img src="clipimg-app/icons/icon_256.png" width="256">
 </p>
 
 <h1 align="center">clipImg</h1>
