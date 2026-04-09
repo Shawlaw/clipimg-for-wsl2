@@ -44,6 +44,14 @@ impl AppConfig {
         let content = std::fs::read_to_string(config_path)?;
         let config: Self = serde_json::from_str(&content)?;
         config.validate()?;
+
+        // 如果旧配置文件缺少字段，回写补全（如 max_history_hours）
+        let normalized = serde_json::to_string_pretty(&config)?;
+        if normalized != content {
+            std::fs::write(config_path, &normalized)?;
+            log::info!("配置文件已自动补全缺失字段: {}", config_path.display());
+        }
+
         log::info!("已加载配置文件: {}", config_path.display());
         Ok(config)
     }
