@@ -6,9 +6,9 @@
 
 <p align="center">WSL2 / Docker 剪贴板图片工具</p>
 
-> **v1.0.1**
+> 当前版本：**v1.0.1**
 
-在 Windows 复制图片后，在 WSL2 终端（Claude Code CLI、Codex CLI 等）粘贴即可得到图片路径。
+在 Windows 截取图片后（目前自测PrintScreen键系统级截屏、QQ快捷键截屏、微信快捷键截屏均有效），在 WSL2 终端（Claude Code CLI、Codex CLI 等）里粘贴即可让多模态模型“看到”图片。
 
 ## 功能特性
 
@@ -128,12 +128,15 @@ clipimg-app/
 │   ├── input.rs            # 路径输入：热键模式（SendInput + IME 切换）+ 剪贴板模式（多格式设置）
 │   ├── first_run.rs        # 首次运行路径确认对话框（Win32 内存对话框）
 │   └── logger.rs           # 文件 + 控制台双写日志 + panic handler
-├── icons/                  # 应用图标（生成工具见 examples/gen_icon.rs）
+├── assets/                 # UI 资源源文件（不打包进程序，用于后续调整）
+│   ├── icon_source.png     # 应用图标设计稿（1024x1024），所有尺寸从此图生成
+│   └── icon_raw.png        # 图标草稿/备用版本
+├── icons/                  # 编译用图标文件（由 assets/ 生成）
 ├── examples/
-│   └── gen_icon.rs         # 图标生成工具
+│   ├── gen_icon.rs         # 程序生成简约图标
+│   └── convert_icon.rs     # 从设计稿生成各尺寸图标
 ├── Cargo.toml
-├── build.rs                # Windows 资源编译（EXE 图标）
-├── resource.rc             # Windows 资源定义
+├── build.rs                # Windows 资源编译（EXE 图标 + 版本信息）
 └── config.example.json
 ```
 
@@ -179,6 +182,24 @@ clipimg-app/
 
 **SendInput 在 UAC 提权窗口无效**
 - 这是 Windows 安全限制，非管理员进程无法向管理员进程发送输入
+
+---
+
+## 版本记录
+
+### v1.0.1
+
+- 去掉控制台黑框：默认以 Windows 子系统运行，双击即用无黑窗口；编译时加 `--features console` 可保留控制台用于调试
+- 应用图标：EXE 文件图标、系统托盘图标、Windows 属性面板版本信息（产品名称、版本号、文件版本）
+- 开机自启：托盘菜单新增勾选框开关，通过读写注册表 `HKCU\...\Run` 实现
+- 首次运行引导：弹出路径确认对话框，用户可修改图片保存目录后确认生成 `config.json`
+- 历史保留改为小时级：`max_history_days` → `max_history_hours`（默认 1 小时），旧配置文件自动兼容
+- 启动失败弹窗提示：配置错误、热键被占用等问题会弹出错误信息，不再闪退无反馈
+- 建立 `assets/` 目录管理 UI 资源源文件
+
+### v1.0.0
+
+虽然很简陋，但的确是可用的第一个版本。
 
 ---
 
