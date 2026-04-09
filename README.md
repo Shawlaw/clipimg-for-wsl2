@@ -1,4 +1,10 @@
-# clipImg — WSL2 / Docker 剪贴板图片工具
+<p align="center">
+  <img src="clipimg-app/icons/icon_128.png" width="64">
+</p>
+
+<h1 align="center">clipImg</h1>
+
+<p align="center">WSL2 / Docker 剪贴板图片工具</p>
 
 > **v1.0.1**
 

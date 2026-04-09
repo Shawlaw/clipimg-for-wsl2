@@ -33,9 +33,6 @@ windows-sys = { version = "0.59", features = [
 default = []
 console = []
 
-[build-dependencies]
-embed-resource = "2"
-
 [dev-dependencies]
 tempfile = "3"
 

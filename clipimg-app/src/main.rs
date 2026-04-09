@@ -46,7 +46,7 @@ fn run_app() {
     use config::AppConfig;
     use global_hotkey::hotkey::HotKey;
     use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
-    use muda::{Menu, MenuItem, PredefinedMenuItem};
+    use muda::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
     use std::time::{Duration, Instant};
     use tao::event_loop::{ControlFlow, EventLoop};
     use tray_icon::TrayIconBuilder;
@@ -182,7 +182,7 @@ fn run_app() {
     let open_log = MenuItem::with_id("open_log", "打开日志文件", true, None);
     let open_config = MenuItem::with_id("open_config", "打开配置文件", true, None);
     let open_dir = MenuItem::with_id("open_dir", "打开图片目录", true, None);
-    let autostart_item = MenuItem::with_id("autostart", "开机自启", autostart_enabled, None);
+    let autostart_item = CheckMenuItem::with_id("autostart", "开机自启", true, autostart_enabled, None);
     let quit_item = MenuItem::with_id("quit", "退出", true, None);
 
     tray_menu
@@ -275,6 +275,9 @@ fn run_app() {
                 }
                 "autostart" => {
                     toggle_autostart();
+                    let now_enabled = is_autostart_enabled();
+                    autostart_item.set_checked(now_enabled);
+                    log::info!("开机自启: {}", if now_enabled { "已启用" } else { "已禁用" });
                 }
                 "quit" => {
                     log::info!("用户选择退出");
