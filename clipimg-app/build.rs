@@ -62,7 +62,8 @@ END
     let rc_path = format!("{}/resource.rc", out_dir);
     std::fs::write(&rc_path, &rc_content).expect("无法写入 .rc 文件");
 
-    println!("cargo:rerun-if-changed=icons/icon.ico");
+    // 不指定 rerun-if-changed，让 cargo 在包内文件变化时自动重新运行
+    // 这样每次编译都能拿到最新的编译时间戳
 
     // 查找资源编译器
     let rc = std::env::var("RC").ok()
