@@ -53,6 +53,19 @@
 
 **收益**：响应延迟从 ~800ms 降至近乎即时，空闲时 CPU 占用归零。
 
+### 12. GitHub Actions 构建 EXE 被 SmartScreen 拦截
+
+**现状**：GitHub Actions 编译产出的 `clipimg.exe` 下载到 Windows 后运行时，Microsoft Defender SmartScreen 弹出"无法识别的应用"警告，需要用户点击"更多信息"→"仍要运行"才能执行。影响首次使用体验。
+
+**思路**：
+- 根本原因是 EXE 没有代码签名证书，SmartScreen 对未签名/未知 EXE 会拦截
+- 方案 A：购买代码签名证书（EV 或 OV），CI 中用 `signtool` 签名 EXE（成本高，EV 证书约 $300-400/年）
+- 方案 B：提交到 Microsoft Defender for Endpoint 排除名单（需要 Microsoft 合作伙伴计划）
+- 方案 C：发布时附带 SHA256 校验和，README 中说明如何验证文件完整性并添加信任
+- 方案 D：发布到 Microsoft Store（自动受信任，但需开发者账号 $19）
+- 方案 E：打包为 MSI 安装包并签名，安装后的 EXE 不再被拦截
+- 短期可接受：README 中加说明提示用户这是正常现象
+
 ---
 
 ## 可考虑的优化方向
@@ -120,3 +133,4 @@
 | P2 | 3. 支持复制文件 | 扩展使用场景 | 待实现 | | |
 | P3 | 5. 配置热更新 | 便利性提升 | 待实现 | | |
 | P3 | 10. 便携/安装模式 | 边缘场景 | 待实现 | | |
+| P1 | 12. SmartScreen 拦截 | 影响首次使用体验 | 待实现 | | |
