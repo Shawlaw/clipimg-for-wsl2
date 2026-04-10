@@ -101,11 +101,6 @@ impl AppConfig {
     pub fn latest_png_path(&self, exe_dir: &Path) -> PathBuf {
         self.resolved_save_dir(exe_dir).join("latest.png")
     }
-
-    /// 临时文件路径
-    pub fn tmp_png_path(&self, exe_dir: &Path) -> PathBuf {
-        self.resolved_save_dir(exe_dir).join("_tmp_clip.png")
-    }
 }
 
 /// 检测 Windows 风格绝对路径（如 C:\、E:\）
@@ -234,17 +229,6 @@ mod tests {
         let exe_dir = Path::new("/workspace/clipImg");
         let latest = config.latest_png_path(exe_dir);
         assert_eq!(latest, PathBuf::from("/workspace/clipImg/.clip/latest.png"));
-    }
-
-    #[test]
-    fn test_tmp_png_path() {
-        let config = AppConfig {
-            save_dir: ".clip".to_string(),
-            ..Default::default()
-        };
-        let exe_dir = Path::new("/workspace/clipImg");
-        let tmp = config.tmp_png_path(exe_dir);
-        assert_eq!(tmp, PathBuf::from("/workspace/clipImg/.clip/_tmp_clip.png"));
     }
 
     #[test]
