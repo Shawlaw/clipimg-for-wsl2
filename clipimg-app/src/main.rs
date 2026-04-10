@@ -54,6 +54,30 @@ fn run_app() {
     // --console 模式：附加控制台用于看日志输出
     let console_mode = is_console_mode();
 
+    // 多实例防护：创建命名互斥体，已存在则退出
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        let mutex_name: Vec<u16> = OsStr::new("Global\\clipimg")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            let handle = windows_sys::Win32::System::Threading::CreateMutexW(
+                std::ptr::null_mut(),
+                0,
+                mutex_name.as_ptr(),
+            );
+            let err = windows_sys::Win32::Foundation::GetLastError();
+            if err == 183 {
+                // ERROR_ALREADY_EXISTS
+                fatal_error("clipImg 已在运行中，不能重复启动。");
+            }
+            // handle 不需要关闭，进程退出时自动释放
+            let _ = handle;
+        }
+    }
+
     // 先确定路径
     let exe_dir = get_exe_dir();
     let config_path = exe_dir.join("config.json");
@@ -96,7 +120,7 @@ fn run_app() {
 
     // 初始化日志和 panic handler
     let log_path = save_dir.join(".clipimg.log");
-    logger::init(&log_path, console_mode);
+    logger::init(&log_path, console_mode, config.max_log_size_mb);
     logger::set_panic_hook(&log_path);
 
     let mode_name = if config.is_hotkey_mode() {

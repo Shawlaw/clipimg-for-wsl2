@@ -12,12 +12,18 @@ use std::path::{Path, PathBuf};
 pub struct ClipboardWatcher {
     pub config: AppConfig,
     pub save_dir: PathBuf,
+    /// 上一次保存图片的 MD5，用于在内存中去重，避免盲写磁盘
+    last_md5: std::cell::RefCell<Option<String>>,
 }
 
 impl ClipboardWatcher {
     pub fn new(config: AppConfig, exe_dir: &Path) -> Self {
         let save_dir = config.resolved_save_dir(exe_dir);
-        Self { config, save_dir }
+        Self {
+            config,
+            save_dir,
+            last_md5: std::cell::RefCell::new(None),
+        }
     }
 
     /// 确保保存目录存在
@@ -29,17 +35,25 @@ impl ClipboardWatcher {
     /// 用 RGBA 像素数据轮询并保存（平台无关的核心逻辑）
     /// 返回 true 表示有新图片保存
     pub fn poll_with_data(&self, width: usize, height: usize, rgba: &[u8]) -> bool {
+        // 先在内存中计算 MD5，与上次保存的比对
+        let current_md5 = {
+            let mut hasher = Md5::new();
+            hasher.update(rgba);
+            format!("{:x}", hasher.finalize())
+        };
+
+        {
+            let last = self.last_md5.borrow();
+            if last.as_ref() == Some(&current_md5) {
+                return false; // 内容没变，不写磁盘
+            }
+        }
+
+        // 内容有变化，执行保存
         let tmp_path = self.save_dir.join("_tmp_clip.png");
 
         if let Err(e) = self.save_rgba_to_png(width, height, rgba, &tmp_path) {
             log::warn!("保存临时文件失败: {}", e);
-            let _ = fs::remove_file(&tmp_path);
-            return false;
-        }
-
-        let latest_path = self.save_dir.join("latest.png");
-
-        if self.is_duplicate(&tmp_path, &latest_path) {
             let _ = fs::remove_file(&tmp_path);
             return false;
         }
@@ -53,9 +67,13 @@ impl ClipboardWatcher {
             return false;
         }
 
+        let latest_path = self.save_dir.join("latest.png");
         if let Err(e) = fs::copy(&history_path, &latest_path) {
             log::warn!("更新 latest.png 失败: {}", e);
         }
+
+        // 更新缓存的 MD5
+        *self.last_md5.borrow_mut() = Some(current_md5);
 
         log::info!("新图片已保存: {}", history_path.display());
         true
@@ -248,7 +266,9 @@ mod tests {
         }
 
         fn create_test_png(&self, name: &str, color: [u8; 4]) -> PathBuf {
-            let path = self.dir.path().join(".clip").join(name);
+            let clip_dir = self.dir.path().join(".clip");
+            let _ = fs::create_dir_all(&clip_dir);
+            let path = clip_dir.join(name);
             let img = RgbaImage::from_pixel(10, 10, Rgba(color));
             img.save_with_format(&path, ImageFormat::Png).unwrap();
             path

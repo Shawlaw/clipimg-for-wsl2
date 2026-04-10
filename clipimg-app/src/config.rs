@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 fn default_max_history_hours() -> u32 { 1 }
+fn default_max_log_size_mb() -> u32 { 1 }
 
 /// 应用配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,6 +18,9 @@ pub struct AppConfig {
     /// 历史图片最大保留小时数
     #[serde(default = "default_max_history_hours")]
     pub max_history_hours: u32,
+    /// 日志文件最大大小（MB），超过后轮转
+    #[serde(default = "default_max_log_size_mb")]
+    pub max_log_size_mb: u32,
 }
 
 impl Default for AppConfig {
@@ -27,6 +31,7 @@ impl Default for AppConfig {
             save_dir: ".clip".to_string(),
             poll_interval_ms: 800,
             max_history_hours: 1,
+            max_log_size_mb: 1,
         }
     }
 }

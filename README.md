@@ -6,7 +6,7 @@
 
 <p align="center">WSL2 / Docker 剪贴板图片工具</p>
 
-> 当前版本：**v1.0.2**
+> 当前版本：**v1.0.3**
 
 在 Windows 截取图片后（目前自测PrintScreen键系统级截屏、QQ快捷键截屏、微信快捷键截屏均有效），在 WSL2 终端（Claude Code CLI、Codex CLI 等）里粘贴即可让多模态模型“看到”图片。
 
@@ -67,6 +67,7 @@
 | `save_dir` | `.clip` | 图片在 Windows 侧的保存目录。相对路径基于 EXE 所在目录，也支持绝对路径（需转义符号"\\"）如 `E:\\workspace\\.clip` |
 | `poll_interval_ms` | `800` | 剪贴板轮询间隔（毫秒） |
 | `max_history_hours` | `1` | 历史图片最大保留小时数（`latest.png` 始终保留） |
+| `max_log_size_mb` | `1` | 日志文件最大大小（MB），超过后自动轮转 |
 
 **两个路径的关系：`save_dir` 是 Windows 文件系统上的实际写入位置，`output_path` 是 WSL 容器内能识别的路径，两者通过目录挂载映射到同一个物理文件。**
 
@@ -186,6 +187,12 @@ clipimg-app/
 ---
 
 ## 版本记录
+
+### v1.0.3
+
+- 剪贴板轮询去盲写磁盘：先在内存中比对 MD5，内容没变不写磁盘
+- 日志循环写：超过配置大小（`max_log_size_mb`，默认 1MB）自动轮转，防止撑爆磁盘
+- 多实例防护：启动时检测互斥体，已有实例运行则弹窗提示并退出
 
 ### v1.0.2
 

@@ -1,6 +1,6 @@
 [package]
 name = "clipimg"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 description = "Clipboard image watcher + hotkey paste tool for Docker/WSL2 workflows"
 
@@ -22,6 +22,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_Threading",
+    "Win32_Security",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
