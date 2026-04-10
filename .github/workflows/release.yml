@@ -23,6 +23,9 @@ jobs:
       - name: Install cargo-xwin
         run: cargo install cargo-xwin
 
+      - name: Install LLVM (for llvm-rc resource compiler)
+        run: sudo apt-get install -y llvm
+
       - name: Build
         working-directory: clipimg-app
         run: cargo xwin build --target x86_64-pc-windows-msvc --release
