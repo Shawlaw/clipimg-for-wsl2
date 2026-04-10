@@ -1,0 +1,47 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install cargo-xwin
+        run: cargo install cargo-xwin
+
+      - name: Build
+        working-directory: clipimg-app
+        run: cargo xwin build --target x86_64-pc-windows-msvc --release
+
+      - name: Extract tag message as release body
+        id: release_note
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          # 读取 annotated tag 的消息内容
+          TAG_BODY=$(git for-each-ref --format='%(contents)' "refs/tags/$TAG_NAME")
+          # 如果 tag 没有注解，使用默认内容
+          if [ -z "$TAG_BODY" ]; then
+            TAG_BODY="请参阅 README 版本记录获取更新详情。"
+          fi
+          # 写入文件供后续步骤使用（多行内容通过文件传递）
+          echo "$TAG_BODY" > /tmp/release_body.md
+          echo "Written release body ($(wc -l < /tmp/release_body.md) lines)"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: /tmp/release_body.md
+          files: clipimg-app/target/x86_64-pc-windows-msvc/release/clipimg.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
