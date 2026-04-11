@@ -105,6 +105,8 @@ if let Ok(()) = clip_rx.try_recv() {
 ### 3. 修改 `src/config.rs`
 
 - `poll_interval_ms` 字段保留不删除（保持配置文件向后兼容）
+- 加载配置时检测到 `poll_interval_ms` 字段存在，打印 `log::warn!("poll_interval_ms 字段已废弃，建议从配置文件中删除")`
+- 实现方式：用 `serde` 的 `#[serde(default)]` 无法区分"字段缺失"和"字段存在但等于默认值"，改为加载 JSON 后先检查原始 JSON 是否包含该 key，再反序列化
 - 日志中打印 "剪贴板监听模式" 而非 "轮询间隔: 800ms"
 
 ### 4. `Cargo.toml` windows-sys features
@@ -115,7 +117,7 @@ if let Ok(()) = clip_rx.try_recv() {
 
 | 配置项 | v1.0.3 | v1.0.4 | 说明 |
 |--------|--------|--------|------|
-| `poll_interval_ms` | 轮询间隔 | 保留但不再使用 | 不删字段，旧配置文件不报错 |
+| `poll_interval_ms` | 轮询间隔 | 保留但不再使用，加载时 warn 提示废弃 | 不删字段，旧配置文件不报错 |
 | 其他字段 | 不变 | 不变 | — |
 
 ## 测试策略
@@ -155,6 +157,7 @@ if let Ok(()) = clip_rx.try_recv() {
 ### Step 4: 更新 README + 版本号
 - 版本号 → 1.0.4
 - README 版本记录新增 v1.0.4 条目
+- README 配置说明表格：移除 `poll_interval_ms` 行，标注为已废弃
 - todo.md 更新状态
 
 ## 风险与应对
