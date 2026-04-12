@@ -40,7 +40,6 @@
   "hotkey": "",
   "output_path": "/workspace/.clip/latest.png",
   "save_dir": ".clip",
-  "poll_interval_ms": 800,
   "max_history_hours": 1
 }
 ```
@@ -65,7 +64,6 @@
 | `hotkey` | `""` | 全局热键。**空字符串 = 剪贴板模式**，设置值则启用热键模式（如 `"Alt+Insert"`、`"Ctrl+Shift+V"`） |
 | `output_path` | `/workspace/.clip/latest.png` | 粘贴/输入到终端的路径（容器侧路径） |
 | `save_dir` | `.clip` | 图片在 Windows 侧的保存目录。相对路径基于 EXE 所在目录，也支持绝对路径（需转义符号"\\"）如 `E:\\workspace\\.clip` |
-| `poll_interval_ms` | `800` | ~~已废弃~~ 剪贴板已改为事件驱动监听，该字段可从配置文件中删除 |
 | `max_history_hours` | `1` | 历史图片最大保留小时数（`latest.png` 始终保留） |
 | `max_log_size_mb` | `1` | 日志文件最大大小（MB），超过后自动轮转 |
 
