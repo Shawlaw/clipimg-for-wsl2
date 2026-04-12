@@ -8,15 +8,29 @@
 
 **思路**：先在内存中计算剪贴板图片的 MD5，与 `latest.png` 的 MD5 比对，不同才写磁盘。需要保留上一次的 MD5 值避免重复读文件。
 
-### 2. 配置路径错误检测与提示
+### 2. 配置路径优化：首次启动双路径引导 + output_path 改目录级
 
-**现状**：用户配错 `save_dir` 或 `output_path` 时，程序静默运行，图片保存到错误位置或粘贴出的路径在容器内不存在。
+**现状**：
+- 首次启动只确认 `save_dir`，`output_path` 用默认值 `/workspace/.clip/latest.png`
+- 用户挂载路径不是 `/workspace` 时，粘贴出的路径在容器内找不到文件
+- `output_path` 是文件级路径（含 `latest.png`），与 `save_dir`（目录级）概念不对等
 
 **思路**：
-- 启动时检查 `save_dir` 是否可写（创建测试文件再删除）
-- `output_path` 是 WSL2/容器内的路径，程序跑在 Windows 宿主机上无法直接验证该路径是否存在，但可以在日志中提示用户自行确认路径映射
-- 托盘菜单提供「检查配置」选项，显示当前 `save_dir` 和 `output_path` 的值，提醒用户确认两者指向同一物理文件
-- 路径校验失败时通过托盘气泡通知提示用户
+
+**config 层改动：**
+- `output_path` 语义从文件级改为目录级（`/workspace/.clip`，不含 `latest.png`）
+- 新增 `config.resolved_output_path()` 方法，返回 `format!("{}/latest.png", output_path)`
+- 所有使用 `output_path` 的地方改为调用该方法（main.rs、input.rs）
+- 旧配置兼容：加载时检测 `output_path` 以 `/latest.png` 结尾则自动截断，warn 日志提示
+
+**首次启动对话框改动：**
+- 改为双输入框，上方说明"两个路径指向同一个物理目录（WSL2 挂载）"
+- Windows 侧（程序实际写入）：展示解析后的绝对路径，如 `E:\...\workspace\.clip`
+- 中间用 `↕ 挂载映射` 标注对应关系
+- 容器侧（粘贴到终端的路径）：默认 `/workspace/.clip`
+- 用户确认后保存两个路径到 config.json
+
+**涉及文件：** config.rs、first_run.rs、main.rs、input.rs、README.md、config.example.json
 
 ### 3. 支持直接复制文件（CF_HDROP）
 
