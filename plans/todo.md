@@ -21,7 +21,7 @@
 - `output_path` 语义从文件级改为目录级（`/workspace/.clip`，不含 `latest.png`）
 - 新增 `config.resolved_output_path()` 方法，返回 `format!("{}/latest.png", output_path)`
 - 所有使用 `output_path` 的地方改为调用该方法（main.rs、input.rs）
-- 旧配置兼容：加载时检测 `output_path` 以 `/latest.png` 结尾则自动截断，warn 日志提示
+- 旧配置兼容：加载时检测 `output_path` 以 `/latest.png` 结尾则自动截断，warn 日志提示，并将截断后的值回写配置文件
 
 **首次启动对话框改动：**
 - 改为双输入框，上方说明"两个路径指向同一个物理目录（WSL2 挂载）"
