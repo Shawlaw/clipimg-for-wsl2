@@ -102,7 +102,7 @@
 **运行时重载范围：**
 - `output_path`、`save_dir`、`max_history_hours`、`max_log_size_mb` → 直接更新内存值
 - `hotkey` → 反注册旧热键 + 注册新热键，热键模式/剪贴板模式切换也在这里处理
-- `poll_interval_ms` → 已废弃，忽略
+- `poll_interval_ms` → 已废弃，加载时从配置文件中删除并回写
 
 **涉及文件：** config.rs（reload 方法）、main.rs（菜单项 + 文件监控线程 + 重载逻辑）、可能新增 config_watcher.rs
 
