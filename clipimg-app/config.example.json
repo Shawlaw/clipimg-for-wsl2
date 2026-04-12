@@ -1,7 +1,7 @@
 {
   "hotkey": "",
-  "output_path": "/workspace/.clip/latest.png",
+  "output_path": "/workspace/.clip",
   "save_dir": ".clip",
-  "poll_interval_ms": 800,
-  "max_history_hours": 1
+  "max_history_hours": 1,
+  "max_log_size_mb": 1
 }

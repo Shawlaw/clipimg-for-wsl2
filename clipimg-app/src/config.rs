@@ -9,13 +9,11 @@ fn default_max_log_size_mb() -> u32 { 1 }
 pub struct AppConfig {
     /// 全局热键，如 "Alt+Insert"、"Ctrl+Shift+V"
     pub hotkey: String,
-    /// 热键触发时输入到终端的路径（容器侧路径）
+    /// 容器侧目录路径（目录级，不含 latest.png）
+    /// 粘贴/输入到终端时自动拼接 /latest.png
     pub output_path: String,
     /// 图片在 Windows 侧的保存目录（相对或绝对路径）
     pub save_dir: String,
-    /// 剪贴板轮询间隔（毫秒）— 已废弃，保留用于配置文件兼容
-    #[serde(default)]
-    pub poll_interval_ms: u64,
     /// 历史图片最大保留小时数
     #[serde(default = "default_max_history_hours")]
     pub max_history_hours: u32,
@@ -28,9 +26,8 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             hotkey: "".to_string(),
-            output_path: "/workspace/.clip/latest.png".to_string(),
+            output_path: "/workspace/.clip".to_string(),
             save_dir: ".clip".to_string(),
-            poll_interval_ms: 800,
             max_history_hours: 1,
             max_log_size_mb: 1,
         }
@@ -48,23 +45,58 @@ impl AppConfig {
         }
 
         let content = std::fs::read_to_string(config_path)?;
-        let config: Self = serde_json::from_str(&content)?;
+
+        // 旧配置兼容：处理废弃字段和格式变化
+        let migrated = Self::migrate_config(&content);
+        let content_to_parse = if migrated != content {
+            std::fs::write(config_path, &migrated)?;
+            log::info!("配置文件已自动迁移: {}", config_path.display());
+            migrated
+        } else {
+            content
+        };
+
+        let mut config: Self = serde_json::from_str(&content_to_parse)?;
+
+        // 旧配置兼容：output_path 从文件级截断为目录级
+        if config.output_path.ends_with("/latest.png") {
+            let truncated = config.output_path.trim_end_matches("/latest.png").to_string();
+            log::warn!(
+                "output_path 已从文件级自动截断为目录级: {} → {}",
+                config.output_path,
+                truncated
+            );
+            config.output_path = truncated;
+            config.save(config_path)?;
+        }
+
         config.validate()?;
-
-        // 检测废弃字段
-        if content.contains("poll_interval_ms") {
-            log::warn!("poll_interval_ms 字段已废弃，剪贴板已改为事件驱动监听，建议从配置文件中删除该字段");
-        }
-
-        // 如果旧配置文件缺少字段，回写补全（如 max_history_hours）
-        let normalized = serde_json::to_string_pretty(&config)?;
-        if normalized != content {
-            std::fs::write(config_path, &normalized)?;
-            log::info!("配置文件已自动补全缺失字段: {}", config_path.display());
-        }
 
         log::info!("已加载配置文件: {}", config_path.display());
         Ok(config)
+    }
+
+    /// 迁移配置文件内容（移除废弃字段 poll_interval_ms）
+    fn migrate_config(content: &str) -> String {
+        let mut json: serde_json::Value = match serde_json::from_str(content) {
+            Ok(v) => v,
+            Err(_) => return content.to_string(),
+        };
+
+        let mut changed = false;
+
+        if let Some(obj) = json.as_object_mut() {
+            if obj.remove("poll_interval_ms").is_some() {
+                log::warn!("poll_interval_ms 字段已废弃，已从配置文件中自动删除");
+                changed = true;
+            }
+        }
+
+        if changed {
+            serde_json::to_string_pretty(&json).unwrap_or_else(|_| content.to_string())
+        } else {
+            content.to_string()
+        }
     }
 
     /// 保存配置到文件
@@ -79,15 +111,11 @@ impl AppConfig {
 
     /// 校验配置合法性
     pub fn validate(&self) -> Result<(), String> {
-        // hotkey 为空表示使用多格式剪贴板模式（方案 C），是合法的
         if self.output_path.trim().is_empty() {
             return Err("output_path 不能为空".to_string());
         }
         if self.save_dir.trim().is_empty() {
             return Err("save_dir 不能为空".to_string());
-        }
-        if self.poll_interval_ms == 0 {
-            return Err("poll_interval_ms 不能为 0".to_string());
         }
         Ok(())
     }
@@ -95,6 +123,11 @@ impl AppConfig {
     /// 是否使用热键模式（方案 A）
     pub fn is_hotkey_mode(&self) -> bool {
         !self.hotkey.trim().is_empty()
+    }
+
+    /// 获取容器侧完整文件路径（自动拼接 /latest.png）
+    pub fn resolved_output_path(&self) -> String {
+        format!("{}/latest.png", self.output_path.trim_end_matches('/'))
     }
 
     /// 解析 save_dir 为绝对路径
@@ -133,9 +166,8 @@ mod tests {
     fn test_default_config() {
         let config = AppConfig::default();
         assert_eq!(config.hotkey, "");
-        assert_eq!(config.output_path, "/workspace/.clip/latest.png");
+        assert_eq!(config.output_path, "/workspace/.clip");
         assert_eq!(config.save_dir, ".clip");
-        assert_eq!(config.poll_interval_ms, 800);
         assert_eq!(config.max_history_hours, 1);
     }
 
@@ -161,6 +193,7 @@ mod tests {
         let config = AppConfig::load(&config_path).unwrap();
         assert!(config_path.exists());
         assert_eq!(config.hotkey, "");
+        assert_eq!(config.output_path, "/workspace/.clip");
     }
 
     #[test]
@@ -177,14 +210,14 @@ mod tests {
     fn test_validate_empty_hotkey_is_ok() {
         let mut config = AppConfig::default();
         config.hotkey = "".to_string();
-        assert!(config.validate().is_ok()); // 空 hotkey 表示方案 C
+        assert!(config.validate().is_ok());
         assert!(!config.is_hotkey_mode());
     }
 
     #[test]
     fn test_is_hotkey_mode() {
         let config = AppConfig::default();
-        assert!(!config.is_hotkey_mode()); // 默认是剪贴板模式
+        assert!(!config.is_hotkey_mode());
 
         let mut config_with_hotkey = AppConfig::default();
         config_with_hotkey.hotkey = "Alt+Insert".to_string();
@@ -199,19 +232,11 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_zero_poll_interval() {
-        let mut config = AppConfig::default();
-        config.poll_interval_ms = 0;
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
     fn test_resolved_save_dir_relative() {
         let config = AppConfig {
             save_dir: ".clip".to_string(),
             ..Default::default()
         };
-        // 相对路径基于 EXE 所在目录
         let exe_dir = Path::new("/some/path/clipImg");
         let resolved = config.resolved_save_dir(exe_dir);
         assert_eq!(resolved, PathBuf::from("/some/path/clipImg/.clip"));
@@ -243,21 +268,78 @@ mod tests {
     }
 
     #[test]
-    fn test_load_old_config_missing_max_history_hours() {
-        // 模拟旧配置文件（有 max_history_days 但没有 max_history_hours）
+    fn test_resolved_output_path() {
+        let config = AppConfig {
+            output_path: "/workspace/.clip".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(config.resolved_output_path(), "/workspace/.clip/latest.png");
+    }
+
+    #[test]
+    fn test_resolved_output_path_trailing_slash() {
+        let config = AppConfig {
+            output_path: "/workspace/.clip/".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(config.resolved_output_path(), "/workspace/.clip/latest.png");
+    }
+
+    #[test]
+    fn test_load_old_config_migrates_poll_interval() {
+        let dir = temp_dir();
+        let config_path = dir.path().join("config.json");
+        let old_json = r#"{
+            "hotkey": "",
+            "output_path": "/workspace/.clip",
+            "save_dir": ".clip",
+            "poll_interval_ms": 800,
+            "max_history_hours": 1
+        }"#;
+        fs::write(&config_path, old_json).unwrap();
+
+        let config = AppConfig::load(&config_path).unwrap();
+        assert_eq!(config.output_path, "/workspace/.clip");
+
+        // 验证配置文件已回写，不再包含 poll_interval_ms
+        let rewritten = fs::read_to_string(&config_path).unwrap();
+        assert!(!rewritten.contains("poll_interval_ms"));
+    }
+
+    #[test]
+    fn test_load_old_config_truncates_output_path() {
         let dir = temp_dir();
         let config_path = dir.path().join("config.json");
         let old_json = r#"{
             "hotkey": "",
             "output_path": "/workspace/.clip/latest.png",
             "save_dir": ".clip",
-            "poll_interval_ms": 800,
+            "max_history_hours": 1
+        }"#;
+        fs::write(&config_path, old_json).unwrap();
+
+        let config = AppConfig::load(&config_path).unwrap();
+        assert_eq!(config.output_path, "/workspace/.clip");
+
+        // 验证配置文件已回写截断后的值
+        let rewritten = fs::read_to_string(&config_path).unwrap();
+        assert!(!rewritten.contains("latest.png"));
+    }
+
+    #[test]
+    fn test_load_old_config_missing_max_history_hours() {
+        let dir = temp_dir();
+        let config_path = dir.path().join("config.json");
+        let old_json = r#"{
+            "hotkey": "",
+            "output_path": "/workspace/.clip",
+            "save_dir": ".clip",
             "max_history_days": 7
         }"#;
         fs::write(&config_path, old_json).unwrap();
 
         let config = AppConfig::load(&config_path).unwrap();
-        assert_eq!(config.max_history_hours, 1, "缺失 max_history_hours 应使用默认值 1");
+        assert_eq!(config.max_history_hours, 1);
     }
 
     #[test]
@@ -266,9 +348,8 @@ mod tests {
         let config_path = dir.path().join("config.json");
         let json = r#"{
             "hotkey": "",
-            "output_path": "/workspace/.clip/latest.png",
+            "output_path": "/workspace/.clip",
             "save_dir": ".clip",
-            "poll_interval_ms": 800,
             "max_history_hours": 4
         }"#;
         fs::write(&config_path, json).unwrap();

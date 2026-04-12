@@ -6,7 +6,7 @@
 
 <p align="center">WSL2 / Docker 剪贴板图片工具</p>
 
-> 当前版本：**v1.0.4**
+> 当前版本：**v1.0.5**
 
 在 Windows 截取图片后（目前自测PrintScreen键系统级截屏、QQ快捷键截屏、微信快捷键截屏均有效），在 WSL2 终端（Claude Code CLI、Codex CLI 等）里粘贴即可让多模态模型“看到”图片。
 
@@ -33,12 +33,12 @@
 
 双击 `clipimg.exe`，任务栏出现托盘图标即表示运行中。
 
-首次运行会弹出路径确认对话框，确认图片保存目录后自动生成 `config.json`：
+首次运行会弹出路径确认对话框，分别确认 Windows 侧和容器侧路径后自动生成 `config.json`：
 
 ```json
 {
   "hotkey": "",
-  "output_path": "/workspace/.clip/latest.png",
+  "output_path": "/workspace/.clip",
   "save_dir": ".clip",
   "max_history_hours": 1
 }
@@ -62,7 +62,7 @@
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | `hotkey` | `""` | 全局热键。**空字符串 = 剪贴板模式**，设置值则启用热键模式（如 `"Alt+Insert"`、`"Ctrl+Shift+V"`） |
-| `output_path` | `/workspace/.clip/latest.png` | 粘贴/输入到终端的路径（容器侧路径） |
+| `output_path` | `/workspace/.clip` | 粘贴/输入到终端的目录路径（容器侧，自动拼接 `/latest.png`） |
 | `save_dir` | `.clip` | 图片在 Windows 侧的保存目录。相对路径基于 EXE 所在目录，也支持绝对路径（需转义符号"\\"）如 `E:\\workspace\\.clip` |
 | `max_history_hours` | `1` | 历史图片最大保留小时数（`latest.png` 始终保留） |
 | `max_log_size_mb` | `1` | 日志文件最大大小（MB），超过后自动轮转 |
@@ -121,9 +121,10 @@ cargo build --release
 ```
 clipimg-app/
 ├── src/
-│   ├── main.rs             # 入口：事件循环 + 托盘 + 双模式分发
-│   ├── config.rs           # 配置文件加载/保存/校验
-│   ├── clipboard.rs        # 剪贴板轮询 + 图片保存 + MD5 去重 + 历史清理
+│   ├── main.rs             # 入口：事件循环 + 托盘 + 双模式分发 + 配置热更新
+│   ├── config.rs           # 配置文件加载/保存/校验/旧配置迁移
+│   ├── clipboard.rs        # 剪贴板图片保存 + MD5 去重 + 历史清理
+│   ├── clipboard_listener.rs # 剪贴板变化监听（Win32 事件驱动，替代轮询）
 │   ├── input.rs            # 路径输入：热键模式（SendInput + IME 切换）+ 剪贴板模式（多格式设置）
 │   ├── first_run.rs        # 首次运行路径确认对话框（Win32 内存对话框）
 │   └── logger.rs           # 文件 + 控制台双写日志 + panic handler
@@ -186,11 +187,20 @@ clipimg-app/
 
 ## 版本记录
 
+### v1.0.5
+
+- 移除 tao 依赖：从 Cargo.toml 移除不再使用的 tao crate，减小编译时间和产物体积
+- 配置路径优化：`output_path` 从文件级改为目录级（如 `/workspace/.clip`，不含 `latest.png`），旧配置自动兼容
+- 首次运行双路径引导：对话框同时展示 Windows 侧和容器侧路径，说明挂载映射关系
+- 配置热更新：支持文件监控自动重载（`ReadDirectoryChangesW`）+ 托盘菜单手动重载，修改配置后无需重启
+- 热键热切换：配置重载时自动反注册旧热键、注册新热键，支持运行时切换热键模式/剪贴板模式
+- `poll_interval_ms` 配置项自动清理：加载时从配置文件中删除并回写
+
 ### v1.0.4
 
 - 剪贴板监听替代轮询：使用 Win32 `AddClipboardFormatListener` 事件驱动，空闲时 CPU 占用归零，截图即时响应
 - 移除 tao 事件循环：改用原生 Win32 `GetMessageW` 消息循环，消除 `DeviceEvent` 导致的无效唤醒
-- `poll_interval_ms` 配置项废弃：保留字段兼容旧配置，加载时提示建议删除
+- `poll_interval_ms` 配置项废弃：旧配置文件中保留的字段会在 v1.0.5 加载时自动删除
 
 ### v1.0.3
 
