@@ -7,6 +7,8 @@ fn main() {
 }
 
 mod clipboard;
+#[cfg(target_os = "windows")]
+mod clipboard_listener;
 mod config;
 #[cfg(target_os = "windows")]
 mod input;
@@ -43,21 +45,25 @@ fn is_console_mode() -> bool {
 #[cfg(target_os = "windows")]
 fn run_app() {
     use clipboard::ClipboardWatcher;
+    use clipboard_listener::ClipboardListener;
     use config::AppConfig;
     use global_hotkey::hotkey::HotKey;
     use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
     use muda::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
-    use std::time::{Duration, Instant};
-    use tao::event_loop::{ControlFlow, EventLoop};
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
     use tray_icon::TrayIconBuilder;
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, GetMessageW, PostQuitMessage, RegisterWindowMessageW, TranslateMessage,
+        MSG,
+    };
 
     // --console 模式：附加控制台用于看日志输出
     let console_mode = is_console_mode();
 
     // 多实例防护：创建命名互斥体，已存在则退出
     {
-        use std::ffi::OsStr;
-        use std::os::windows::ffi::OsStrExt;
         let mutex_name: Vec<u16> = OsStr::new("Global\\clipimg")
             .encode_wide()
             .chain(std::iter::once(0))
@@ -153,8 +159,6 @@ fn run_app() {
         log::info!("启动清理: 已删除 {} 个过期图片", deleted);
     }
 
-    let event_loop = EventLoop::new();
-
     // 仅在热键模式下注册全局热键
     let hotkey_manager = if config.is_hotkey_mode() {
         let mgr = match GlobalHotKeyManager::new() {
@@ -249,21 +253,65 @@ fn run_app() {
         Err(e) => fatal_error(&format!("无法访问剪贴板: {:?}", e)),
     };
 
-    let poll_interval = Duration::from_millis(config.poll_interval_ms);
-    let mut last_poll = Instant::now();
+    // 注册自定义消息，用于剪贴板监听线程通知主线程
+    let wm_clip_changed: u32 = unsafe {
+        let name: Vec<u16> = OsStr::new("clipImgClipboardChanged")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        RegisterWindowMessageW(name.as_ptr())
+    };
+    if wm_clip_changed == 0 {
+        fatal_error("RegisterWindowMessageW 失败");
+    }
+
+    let main_thread_id = unsafe { GetCurrentThreadId() };
+
+    // 启动剪贴板监听线程（替代轮询）
+    let _clip_listener = match ClipboardListener::start(main_thread_id, wm_clip_changed) {
+        Ok(listener) => {
+            log::info!("剪贴板监听已启动");
+            listener
+        }
+        Err(e) => fatal_error(&format!("启动剪贴板监听失败: {}", e)),
+    };
 
     let config_clone = config.clone();
     let exe_dir_clone = exe_dir.clone();
 
-    log::info!("事件循环启动，开始监听剪贴板和热键");
+    log::info!("消息循环启动，等待剪贴板变化通知");
     if config.is_hotkey_mode() {
         log::info!("按 {} 输入图片路径", config.hotkey);
     } else {
         log::info!("截图后自动设置多格式剪贴板，在终端 Ctrl+V 粘贴即得到路径");
     }
 
-    event_loop.run(move |_event, _, control_flow| {
-        *control_flow = ControlFlow::Poll;
+    // ============================================================
+    // Win32 消息循环（替代 tao 事件循环，消除 DeviceEvent 噪音）
+    // ============================================================
+    let mut msg: MSG = unsafe { std::mem::zeroed() };
+    loop {
+        // GetMessageW 阻塞等待，无消息时线程休眠 → 零 CPU
+        let ret = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
+        if ret == 0 {
+            // WM_QUIT
+            break;
+        }
+
+        // 剪贴板变化通知
+        if msg.message == wm_clip_changed {
+            let has_new = watcher.poll(&mut clipboard);
+            if has_new && !config.is_hotkey_mode() {
+                let latest = config.latest_png_path(&exe_dir);
+                if latest.exists() {
+                    log::info!("设置多格式剪贴板...");
+                    match input::set_multi_format_clipboard(&config.output_path, &latest) {
+                        Ok(()) => log::info!("多格式剪贴板设置成功"),
+                        Err(e) => log::error!("多格式剪贴板设置失败: {}", e),
+                    }
+                }
+            }
+        }
 
         // 热键事件（仅模式 A）
         if let Some(ref _mgr) = hotkey_manager {
@@ -312,29 +360,20 @@ fn run_app() {
                 }
                 "quit" => {
                     log::info!("用户选择退出");
-                    *control_flow = ControlFlow::Exit;
+                    unsafe { PostQuitMessage(0); }
                 }
                 _ => {}
             }
         }
 
-        // 剪贴板轮询
-        if last_poll.elapsed() >= poll_interval {
-            let has_new = watcher.poll(&mut clipboard);
-            if has_new && !config.is_hotkey_mode() {
-                // 模式 C：新图片保存后，自动设置多格式剪贴板
-                let latest = config.latest_png_path(&exe_dir);
-                if latest.exists() {
-                    log::info!("设置多格式剪贴板...");
-                    match input::set_multi_format_clipboard(&config.output_path, &latest) {
-                        Ok(()) => log::info!("多格式剪贴板设置成功"),
-                        Err(e) => log::error!("多格式剪贴板设置失败: {}", e),
-                    }
-                }
-            }
-            last_poll = Instant::now();
+        // 分发消息给各组件的内部窗口过程（tray-icon、global-hotkey 等）
+        unsafe {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
         }
-    });
+    }
+
+    log::info!("clipImg 已退出");
 }
 
 #[cfg(not(target_os = "windows"))]

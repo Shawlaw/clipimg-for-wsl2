@@ -6,7 +6,7 @@
 
 <p align="center">WSL2 / Docker 剪贴板图片工具</p>
 
-> 当前版本：**v1.0.3**
+> 当前版本：**v1.0.4**
 
 在 Windows 截取图片后（目前自测PrintScreen键系统级截屏、QQ快捷键截屏、微信快捷键截屏均有效），在 WSL2 终端（Claude Code CLI、Codex CLI 等）里粘贴即可让多模态模型“看到”图片。
 
@@ -65,7 +65,7 @@
 | `hotkey` | `""` | 全局热键。**空字符串 = 剪贴板模式**，设置值则启用热键模式（如 `"Alt+Insert"`、`"Ctrl+Shift+V"`） |
 | `output_path` | `/workspace/.clip/latest.png` | 粘贴/输入到终端的路径（容器侧路径） |
 | `save_dir` | `.clip` | 图片在 Windows 侧的保存目录。相对路径基于 EXE 所在目录，也支持绝对路径（需转义符号"\\"）如 `E:\\workspace\\.clip` |
-| `poll_interval_ms` | `800` | 剪贴板轮询间隔（毫秒） |
+| `poll_interval_ms` | `800` | ~~已废弃~~ 剪贴板已改为事件驱动监听，该字段可从配置文件中删除 |
 | `max_history_hours` | `1` | 历史图片最大保留小时数（`latest.png` 始终保留） |
 | `max_log_size_mb` | `1` | 日志文件最大大小（MB），超过后自动轮转 |
 
@@ -187,6 +187,12 @@ clipimg-app/
 ---
 
 ## 版本记录
+
+### v1.0.4
+
+- 剪贴板监听替代轮询：使用 Win32 `AddClipboardFormatListener` 事件驱动，空闲时 CPU 占用归零，截图即时响应
+- 移除 tao 事件循环：改用原生 Win32 `GetMessageW` 消息循环，消除 `DeviceEvent` 导致的无效唤醒
+- `poll_interval_ms` 配置项废弃：保留字段兼容旧配置，加载时提示建议删除
 
 ### v1.0.3
 

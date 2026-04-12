@@ -13,7 +13,8 @@ pub struct AppConfig {
     pub output_path: String,
     /// 图片在 Windows 侧的保存目录（相对或绝对路径）
     pub save_dir: String,
-    /// 剪贴板轮询间隔（毫秒）
+    /// 剪贴板轮询间隔（毫秒）— 已废弃，保留用于配置文件兼容
+    #[serde(default)]
     pub poll_interval_ms: u64,
     /// 历史图片最大保留小时数
     #[serde(default = "default_max_history_hours")]
@@ -49,6 +50,11 @@ impl AppConfig {
         let content = std::fs::read_to_string(config_path)?;
         let config: Self = serde_json::from_str(&content)?;
         config.validate()?;
+
+        // 检测废弃字段
+        if content.contains("poll_interval_ms") {
+            log::warn!("poll_interval_ms 字段已废弃，剪贴板已改为事件驱动监听，建议从配置文件中删除该字段");
+        }
 
         // 如果旧配置文件缺少字段，回写补全（如 max_history_hours）
         let normalized = serde_json::to_string_pretty(&config)?;
