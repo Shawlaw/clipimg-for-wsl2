@@ -88,7 +88,23 @@
 
 **现状**：修改 config.json 后需要重启 EXE 才能生效。
 
-**思路**：监听 config.json 文件变化（或每隔 N 秒检查 mtime），自动重新加载配置并应用（热键重注册、路径更新等）。
+**思路（B + C 双保险）：**
+
+**B. 托盘菜单"重新加载配置"：**
+- 手动触发，作为兜底方案
+- 用户编辑配置后点一下立即生效
+
+**C. Win32 文件监控自动重载：**
+- 使用 `ReadDirectoryChangesW` 监听 config.json 所在目录的文件变化，事件驱动零 CPU
+- 检测到 config.json 变化后通过 `PostThreadMessageW` 通知主线程重载
+- 和剪贴板监听线程同样的模式
+
+**运行时重载范围：**
+- `output_path`、`save_dir`、`max_history_hours`、`max_log_size_mb` → 直接更新内存值
+- `hotkey` → 反注册旧热键 + 注册新热键，热键模式/剪贴板模式切换也在这里处理
+- `poll_interval_ms` → 已废弃，忽略
+
+**涉及文件：** config.rs（reload 方法）、main.rs（菜单项 + 文件监控线程 + 重载逻辑）、可能新增 config_watcher.rs
 
 ### 6. 截图成功托盘通知
 
