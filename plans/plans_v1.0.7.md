@@ -41,15 +41,15 @@ stored.contains(exe_str.as_ref())
 
 ---
 
-## P0-2：非 PNG 文件 CF_HDROP 指向源文件
+## P0-2：CF_HDROP 统一指向源文件
 
-**文件**：`main.rs` 剪贴板变化处理（约第 420 行）
+**文件**：`main.rs` 剪贴板变化处理（PNG 文件复制分支）
 
-**问题**：`set_text_and_file_clipboard(&container_path, &first_file)` 传的是原始文件路径，但 CF_HDROP 应指向 save_dir 中的副本。
+**问题**：PNG 文件复制时 `set_multi_format_clipboard(&container_path, &win_path)` 的 `win_path` 指向了 `save_dir/latest_file.png`（副本），而 HDROP 应统一指向用户复制的源文件。非 PNG 分支已经正确指向 `first_file`。
 
-**修复**：让 `copy_file()` 返回保存后的 Windows 侧完整路径（扩展已有返回值为 `Option<String>` 为 `Option<(String, PathBuf)>`），主流程使用返回的最新路径。
+**设计决策**：CF_HDROP 是给 Windows 资源管理器粘贴用的，指向原始文件最合理；WSL2 终端粘贴走 CF_UNICODETEXT（容器路径），与 HDROP 无关。PNG 多格式剪贴板的意义在于 CF_DIB（图片应用粘贴为图片数据）。
 
-或者更简单：在主流程中用 `watcher.borrow().save_dir.join(...)` 构造正确的 latest 路径。
+**修复**：PNG 文件复制分支的 `win_path` 改为 `first_file`（与 DIB 截图流程区分，截图流程没有源文件，HDROP 指向保存文件是正确的）。
 
 ---
 
