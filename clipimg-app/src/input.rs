@@ -328,6 +328,133 @@ pub fn set_multi_format_clipboard(
 }
 
 // ============================================================================
+// 仅设置文本路径到剪贴板（非图片文件用）
+// ============================================================================
+
+/// 仅设置 CF_UNICODETEXT 到剪贴板（非图片文件场景）
+#[cfg(target_os = "windows")]
+pub fn set_text_clipboard(text: &str) -> Result<(), String> {
+    use windows_sys::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
+
+    unsafe {
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
+            return Err(format!("OpenClipboard 失败: {}", std::io::Error::last_os_error()));
+        }
+
+        if EmptyClipboard() == 0 {
+            CloseClipboard();
+            return Err(format!("EmptyClipboard 失败: {}", std::io::Error::last_os_error()));
+        }
+
+        let text_bytes: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        let text_size = text_bytes.len() * 2;
+        let text_handle = windows_sys::Win32::System::Memory::GlobalAlloc(
+            windows_sys::Win32::System::Memory::GMEM_MOVEABLE,
+            text_size,
+        );
+        if text_handle.is_null() {
+            CloseClipboard();
+            return Err("GlobalAlloc 失败".to_string());
+        }
+        let ptr = windows_sys::Win32::System::Memory::GlobalLock(text_handle) as *mut u16;
+        if ptr.is_null() {
+            CloseClipboard();
+            return Err("GlobalLock 失败".to_string());
+        }
+        std::ptr::copy_nonoverlapping(text_bytes.as_ptr(), ptr, text_bytes.len());
+        windows_sys::Win32::System::Memory::GlobalUnlock(text_handle);
+        SetClipboardData(13, text_handle); // CF_UNICODETEXT = 13
+        CloseClipboard();
+    }
+
+    log::info!("文本路径已设置到剪贴板: {}", text);
+    Ok(())
+}
+
+/// 设置 CF_UNICODETEXT + CF_HDROP 到剪贴板（非图片文件场景）
+///
+/// 终端 Ctrl+V 得到容器路径，资源管理器 Ctrl+V 粘贴保存的文件副本
+#[cfg(target_os = "windows")]
+pub fn set_text_and_file_clipboard(
+    text_path: &str,
+    win_file_path: &std::path::Path,
+) -> Result<(), String> {
+    log::debug!(
+        "set_text_and_file_clipboard: text='{}', win_file='{}'",
+        text_path,
+        win_file_path.display()
+    );
+
+    let win_path_str = win_file_path.to_str().unwrap_or("");
+    let win_path_wide: Vec<u16> = win_path_str.encode_utf16().chain(std::iter::once(0)).collect();
+
+    unsafe {
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
+            return Err(format!("OpenClipboard 失败: {}", std::io::Error::last_os_error()));
+        }
+
+        if EmptyClipboard() == 0 {
+            CloseClipboard();
+            return Err(format!("EmptyClipboard 失败: {}", std::io::Error::last_os_error()));
+        }
+
+        let null_handle: HGLOBAL = std::ptr::null_mut();
+
+        // 1. CF_UNICODETEXT（容器侧路径）
+        let text_bytes: Vec<u16> = text_path.encode_utf16().chain(std::iter::once(0)).collect();
+        let text_size = text_bytes.len() * 2;
+        let text_handle: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, text_size);
+        if text_handle != null_handle {
+            let ptr = GlobalLock(text_handle) as *mut u16;
+            if !ptr.is_null() {
+                std::ptr::copy_nonoverlapping(text_bytes.as_ptr(), ptr, text_bytes.len());
+                GlobalUnlock(text_handle);
+                SetClipboardData(CF_UNICODETEXT, text_handle);
+            }
+        }
+
+        // 2. CF_HDROP（Windows 侧文件路径，资源管理器可粘贴）
+        let dropfiles_size = std::mem::size_of::<DROPFILES>() + (win_path_wide.len() + 1) * 2;
+        let drop_handle: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, dropfiles_size);
+        if drop_handle != null_handle {
+            let ptr = GlobalLock(drop_handle) as *mut u8;
+            if !ptr.is_null() {
+                let df = DROPFILES {
+                    pFiles: std::mem::size_of::<DROPFILES>() as u32,
+                    pt: (0, 0),
+                    fNC: 0,
+                    fWide: 1,
+                };
+                std::ptr::write(ptr as *mut DROPFILES, df);
+                let path_ptr = ptr.add(std::mem::size_of::<DROPFILES>()) as *mut u16;
+                std::ptr::copy_nonoverlapping(win_path_wide.as_ptr(), path_ptr, win_path_wide.len());
+                *path_ptr.add(win_path_wide.len()) = 0;
+                GlobalUnlock(drop_handle);
+                SetClipboardData(CF_HDROP, drop_handle);
+            }
+        }
+
+        CloseClipboard();
+    }
+
+    log::info!("文本+文件剪贴板已设置 (text='{}')", text_path);
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_text_clipboard(_text: &str) -> Result<(), String> {
+    Err("剪贴板操作仅在 Windows 上可用".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_text_and_file_clipboard(
+    _text_path: &str,
+    _win_file_path: &std::path::Path,
+) -> Result<(), String> {
+    Err("剪贴板操作仅在 Windows 上可用".to_string())
+}
+
+// ============================================================================
 // 测试
 // ============================================================================
 

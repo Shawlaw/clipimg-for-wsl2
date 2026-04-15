@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 
 fn default_max_history_hours() -> u32 { 1 }
 fn default_max_log_size_mb() -> u32 { 1 }
+fn default_max_copy_size_mb() -> u32 { 10 }
+fn default_preview_hotkey() -> String { "Ctrl+Alt+P".to_string() }
+fn default_blocked_preview_ext() -> Vec<String> { Vec::new() }
+fn default_show_startup_notification() -> bool { true }
 
 /// 应用配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +24,19 @@ pub struct AppConfig {
     /// 日志文件最大大小（MB），超过后轮转
     #[serde(default = "default_max_log_size_mb")]
     pub max_log_size_mb: u32,
+    /// CF_HDROP 文件最大允许大小（MB），超过则跳过
+    #[serde(default = "default_max_copy_size_mb")]
+    pub max_copy_size_mb: u32,
+    /// 预览快捷键，如 "Ctrl+Alt+P"，空字符串表示不启用
+    #[serde(default = "default_preview_hotkey")]
+    pub preview_hotkey: String,
+    /// 用户自定义的预览拦截后缀名列表（与内置列表取并集）
+    /// 示例: ["dll", "sys", "reg"]
+    #[serde(default = "default_blocked_preview_ext")]
+    pub blocked_preview_ext: Vec<String>,
+    /// 启动时是否显示提示弹窗
+    #[serde(default = "default_show_startup_notification")]
+    pub show_startup_notification: bool,
 }
 
 impl Default for AppConfig {
@@ -30,6 +47,10 @@ impl Default for AppConfig {
             save_dir: ".clip".to_string(),
             max_history_hours: 1,
             max_log_size_mb: 1,
+            max_copy_size_mb: 10,
+            preview_hotkey: "Ctrl+Alt+P".to_string(),
+            blocked_preview_ext: Vec::new(),
+            show_startup_notification: true,
         }
     }
 }
@@ -76,7 +97,7 @@ impl AppConfig {
         Ok(config)
     }
 
-    /// 迁移配置文件内容（移除废弃字段 poll_interval_ms）
+    /// 迁移配置文件内容（移除废弃字段、补充新字段）
     fn migrate_config(content: &str) -> String {
         let mut json: serde_json::Value = match serde_json::from_str(content) {
             Ok(v) => v,
@@ -86,13 +107,33 @@ impl AppConfig {
         let mut changed = false;
 
         if let Some(obj) = json.as_object_mut() {
+            // 移除废弃字段
             if obj.remove("poll_interval_ms").is_some() {
                 log::warn!("poll_interval_ms 字段已废弃，已从配置文件中自动删除");
+                changed = true;
+            }
+
+            // 补充 v1.0.6 新字段
+            if !obj.contains_key("max_copy_size_mb") {
+                obj.insert("max_copy_size_mb".to_string(), serde_json::json!(10));
+                changed = true;
+            }
+            if !obj.contains_key("preview_hotkey") {
+                obj.insert("preview_hotkey".to_string(), serde_json::json!("Ctrl+Alt+P"));
+                changed = true;
+            }
+            if !obj.contains_key("blocked_preview_ext") {
+                obj.insert("blocked_preview_ext".to_string(), serde_json::json!([]));
+                changed = true;
+            }
+            if !obj.contains_key("show_startup_notification") {
+                obj.insert("show_startup_notification".to_string(), serde_json::json!(true));
                 changed = true;
             }
         }
 
         if changed {
+            log::info!("配置文件已自动迁移（补充新字段/移除废弃字段）");
             serde_json::to_string_pretty(&json).unwrap_or_else(|_| content.to_string())
         } else {
             content.to_string()
@@ -125,9 +166,25 @@ impl AppConfig {
         !self.hotkey.trim().is_empty()
     }
 
-    /// 获取容器侧完整文件路径（自动拼接 /latest.png）
+    /// 获取容器侧目录路径（不含文件名）
+    pub fn output_dir(&self) -> &str {
+        self.output_path.trim_end_matches('/')
+    }
+
+    /// 获取容器侧完整文件路径（自动拼接 /latest_file.xxx）
+    /// extension 为空时不含后缀（如 latest_file），否则含后缀（如 latest_file.png）
+    pub fn resolved_output_path_for(&self, extension: &str) -> String {
+        let dir = self.output_dir();
+        if extension.is_empty() {
+            format!("{}/latest_file", dir)
+        } else {
+            format!("{}/latest_file.{}", dir, extension)
+        }
+    }
+
+    /// 获取容器侧完整文件路径（默认 latest_file.png，向后兼容）
     pub fn resolved_output_path(&self) -> String {
-        format!("{}/latest.png", self.output_path.trim_end_matches('/'))
+        self.resolved_output_path_for("png")
     }
 
     /// 解析 save_dir 为绝对路径
@@ -141,9 +198,14 @@ impl AppConfig {
         }
     }
 
-    /// 获取 latest.png 的 Windows 侧完整路径
+    /// 获取 latest_file.png 的 Windows 侧完整路径（截图/DIB 场景）
+    pub fn latest_file_path(&self, exe_dir: &Path) -> PathBuf {
+        self.resolved_save_dir(exe_dir).join("latest_file.png")
+    }
+
+    /// 获取 latest_file.png 的 Windows 侧完整路径（向后兼容别名）
     pub fn latest_png_path(&self, exe_dir: &Path) -> PathBuf {
-        self.resolved_save_dir(exe_dir).join("latest.png")
+        self.latest_file_path(exe_dir)
     }
 }
 
@@ -169,6 +231,8 @@ mod tests {
         assert_eq!(config.output_path, "/workspace/.clip");
         assert_eq!(config.save_dir, ".clip");
         assert_eq!(config.max_history_hours, 1);
+        assert_eq!(config.max_copy_size_mb, 10);
+        assert_eq!(config.preview_hotkey, "Ctrl+Alt+P");
     }
 
     #[test]
@@ -257,14 +321,14 @@ mod tests {
     }
 
     #[test]
-    fn test_latest_png_path() {
+    fn test_latest_file_path() {
         let config = AppConfig {
             save_dir: ".clip".to_string(),
             ..Default::default()
         };
         let exe_dir = Path::new("/workspace/clipImg");
-        let latest = config.latest_png_path(exe_dir);
-        assert_eq!(latest, PathBuf::from("/workspace/clipImg/.clip/latest.png"));
+        let latest = config.latest_file_path(exe_dir);
+        assert_eq!(latest, PathBuf::from("/workspace/clipImg/.clip/latest_file.png"));
     }
 
     #[test]
@@ -273,7 +337,7 @@ mod tests {
             output_path: "/workspace/.clip".to_string(),
             ..Default::default()
         };
-        assert_eq!(config.resolved_output_path(), "/workspace/.clip/latest.png");
+        assert_eq!(config.resolved_output_path(), "/workspace/.clip/latest_file.png");
     }
 
     #[test]
@@ -282,7 +346,18 @@ mod tests {
             output_path: "/workspace/.clip/".to_string(),
             ..Default::default()
         };
-        assert_eq!(config.resolved_output_path(), "/workspace/.clip/latest.png");
+        assert_eq!(config.resolved_output_path(), "/workspace/.clip/latest_file.png");
+    }
+
+    #[test]
+    fn test_resolved_output_path_for() {
+        let config = AppConfig {
+            output_path: "/workspace/.clip".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(config.resolved_output_path_for("png"), "/workspace/.clip/latest_file.png");
+        assert_eq!(config.resolved_output_path_for("pdf"), "/workspace/.clip/latest_file.pdf");
+        assert_eq!(config.resolved_output_path_for(""), "/workspace/.clip/latest_file");
     }
 
     #[test]
