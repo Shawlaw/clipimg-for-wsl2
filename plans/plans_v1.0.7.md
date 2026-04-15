@@ -1,6 +1,6 @@
 # v1.0.7 实施计划
 
-> 基于两份代码审查报告（code-review-clipimg-for-wsl2.md、reviewByGpt5.4.md）整理，去重后共 13 项修复。
+> 基于两份代码审查报告（[reviewByOpus4.6.md](v1.0.6_review/reviewByOpus4.6.md)、[reviewByGpt5.4.md](v1.0.6_review/reviewByGpt5.4.md)）整理，去重后共 13 项修复。
 
 ## 优先级分类
 
