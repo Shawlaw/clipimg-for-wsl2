@@ -45,7 +45,9 @@
   "max_history_hours": 1,
   "max_log_size_mb": 1,
   "max_copy_size_mb": 10,
-  "preview_hotkey": "Ctrl+Alt+P"
+  "preview_hotkey": "Ctrl+Alt+P",
+  "blocked_preview_ext": [],
+  "show_startup_notification": true
 }
 ```
 
