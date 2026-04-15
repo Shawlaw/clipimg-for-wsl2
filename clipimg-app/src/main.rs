@@ -164,6 +164,9 @@ fn run_app() {
     // 迁移旧版 latest.png → latest_file.png
     watcher.borrow().migrate_old_latest();
 
+    // 从磁盘恢复 latest_container_path（重启后保持正确的扩展名）
+    watcher.borrow().sync_latest_from_disk();
+
     // 仅在热键模式下注册全局热键
     let hotkey_manager: Rc<RefCell<Option<GlobalHotKeyManager>>> = if config.borrow().is_hotkey_mode() {
         let mgr = match GlobalHotKeyManager::new() {
@@ -372,8 +375,8 @@ fn run_app() {
     // ============================================================
     let mut msg: MSG = unsafe { std::mem::zeroed() };
     // 防止剪贴板反馈环：我们设置剪贴板后，监听器会再次触发，
-    // 用此标志跳过自身触发的通知
-    let mut clipboard_self_triggered = false;
+    // 用 500ms 冷却期跳过自身触发的通知
+    let mut last_self_set_time: Option<std::time::Instant> = None;
     loop {
         // GetMessageW 阻塞等待，无消息时线程休眠 → 零 CPU
         let ret = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
@@ -386,8 +389,10 @@ fn run_app() {
         if msg.message == wm_config_changed {
             do_reload_config(
                 &config,
+                &watcher,
                 &config_path,
                 &hotkey_manager,
+                &preview_hotkey,
                 &status_item,
                 &preview_item,
                 &exe_dir,
@@ -397,9 +402,12 @@ fn run_app() {
 
         // 剪贴板变化通知
         if msg.message == wm_clip_changed {
-            // 跳过自身触发的剪贴板变化（防止反馈环）
-            if clipboard_self_triggered {
-                clipboard_self_triggered = false;
+            // 跳过自身触发的剪贴板变化（防止反馈环，500ms 冷却期）
+            let is_self_triggered = last_self_set_time
+                .map(|t| t.elapsed() < std::time::Duration::from_millis(500))
+                .unwrap_or(false);
+            if is_self_triggered {
+                last_self_set_time = None;
             } else {
                 // 先检查 CF_HDROP（文件复制）
                 let hdrop_handled = if let Some(files) = clipboard::read_clipboard_files() {
@@ -409,16 +417,15 @@ fn run_app() {
                             if !config.borrow().is_hotkey_mode() {
                                 let container_path = watcher.borrow().latest_container_path.borrow().clone();
                                 if is_png {
-                                    let win_path = config.borrow().latest_file_path(&exe_dir);
                                     log::info!("设置多格式剪贴板 (PNG)...");
-                                    match input::set_multi_format_clipboard(&container_path, &win_path) {
-                                        Ok(()) => { clipboard_self_triggered = true; log::info!("多格式剪贴板设置成功"); }
+                                    match input::set_multi_format_clipboard(&container_path, &first_file) {
+                                        Ok(()) => { last_self_set_time = Some(std::time::Instant::now()); log::info!("多格式剪贴板设置成功"); }
                                         Err(e) => log::error!("多格式剪贴板设置失败: {}", e),
                                     }
                                 } else {
                                     log::info!("设置文本+文件剪贴板: {}", container_path);
                                     match input::set_text_and_file_clipboard(&container_path, &first_file) {
-                                        Ok(()) => { clipboard_self_triggered = true; log::info!("文本+文件剪贴板设置成功"); }
+                                        Ok(()) => { last_self_set_time = Some(std::time::Instant::now()); log::info!("文本+文件剪贴板设置成功"); }
                                         Err(e) => log::error!("文本+文件剪贴板设置失败: {}", e),
                                     }
                                 }
@@ -443,7 +450,7 @@ fn run_app() {
                             let container_path = watcher.borrow().latest_container_path.borrow().clone();
                             log::info!("设置多格式剪贴板...");
                             match input::set_multi_format_clipboard(&container_path, &win_path) {
-                                Ok(()) => { clipboard_self_triggered = true; log::info!("多格式剪贴板设置成功"); }
+                                Ok(()) => { last_self_set_time = Some(std::time::Instant::now()); log::info!("多格式剪贴板设置成功"); }
                                 Err(e) => log::error!("多格式剪贴板设置失败: {}", e),
                             }
                         }
@@ -506,8 +513,10 @@ fn run_app() {
                 "reload_config" => {
                     do_reload_config(
                         &config,
+                        &watcher,
                         &config_path,
                         &hotkey_manager,
+                        &preview_hotkey,
                         &status_item,
                         &preview_item,
                         &exe_dir,
@@ -607,8 +616,10 @@ fn show_notification(title: &str, message: &str, _save_dir: &std::path::Path) {
 #[cfg(target_os = "windows")]
 fn do_reload_config(
     config: &std::rc::Rc<std::cell::RefCell<config::AppConfig>>,
+    watcher: &std::rc::Rc<std::cell::RefCell<clipboard::ClipboardWatcher>>,
     config_path: &std::path::Path,
     hotkey_manager: &std::rc::Rc<std::cell::RefCell<Option<global_hotkey::GlobalHotKeyManager>>>,
+    preview_hotkey_cell: &std::rc::Rc<std::cell::RefCell<Option<global_hotkey::hotkey::HotKey>>>,
     status_item: &muda::MenuItem,
     preview_item: &muda::MenuItem,
     exe_dir: &std::path::Path,
@@ -638,13 +649,39 @@ fn do_reload_config(
 
     let old_hotkey_mode = config.borrow().is_hotkey_mode();
     let old_hotkey = config.borrow().hotkey.clone();
+    let old_preview_hotkey = config.borrow().preview_hotkey.clone();
     let hotkey_changed = old_hotkey_mode != new_config.is_hotkey_mode()
         || old_hotkey != new_config.hotkey;
+    let preview_changed = old_preview_hotkey != new_config.preview_hotkey;
 
     // 更新配置
     *config.borrow_mut() = new_config.clone();
 
-    // 热键变化时重新注册
+    // 同步 watcher 内部 config 副本
+    {
+        let mut w = watcher.borrow_mut();
+        w.config = new_config.clone();
+        let new_save_dir = new_config.resolved_save_dir(exe_dir);
+        if w.save_dir != new_save_dir {
+            log::info!("save_dir 变更: {} → {}", w.save_dir.display(), new_save_dir.display());
+            w.save_dir = new_save_dir;
+        }
+    }
+
+    // 确保热键管理器存在（如果需要注册任何热键）
+    let need_manager = new_config.is_hotkey_mode()
+        || !new_config.preview_hotkey.trim().is_empty();
+    if need_manager && hotkey_manager.borrow().is_none() {
+        match global_hotkey::GlobalHotKeyManager::new() {
+            Ok(mgr) => *hotkey_manager.borrow_mut() = Some(mgr),
+            Err(e) => {
+                log::error!("创建热键管理器失败: {:?}", e);
+                return;
+            }
+        }
+    }
+
+    // 输入热键变化时重新注册
     if hotkey_changed {
         // 先反注册旧热键
         if old_hotkey_mode {
@@ -666,16 +703,6 @@ fn do_reload_config(
 
         // 注册新热键
         if new_config.is_hotkey_mode() {
-            if hotkey_manager.borrow().is_none() {
-                match global_hotkey::GlobalHotKeyManager::new() {
-                    Ok(mgr) => *hotkey_manager.borrow_mut() = Some(mgr),
-                    Err(e) => {
-                        log::error!("创建热键管理器失败: {:?}", e);
-                        return;
-                    }
-                }
-            }
-
             let new_key: HotKey = match HotKey::try_from(new_config.hotkey.clone()) {
                 Ok(k) => k,
                 Err(e) => {
@@ -690,21 +717,52 @@ fn do_reload_config(
                     Err(e) => log::error!("注册新热键失败: {:?}", e),
                 }
             }
-        } else {
-            // 切换到剪贴板模式，释放热键管理器
-            *hotkey_manager.borrow_mut() = None;
-            log::info!("已切换到剪贴板模式，热键管理器已释放");
         }
     }
 
-    // 更新 watcher 配置
-    // （watcher 在 main 中也用 Rc<RefCell> 包裹，但这里无法直接访问。
-    //  watcher.config 会在下次 poll 时读到新的 config... 不对，watcher 有自己的 config 副本。
-    //  实际上 watcher 的 config 是独立副本，需要在 main 的 loop 中也更新它。
-    //  由于 do_reload_config 被 main loop 调用后，watcher 的 config 需要同步。
-    //  这个在 main loop 外面处理比较麻烦，先不更新 watcher.config，
-    //  因为 watcher 的核心逻辑（保存目录、MD5去重）在启动时已确定。
-    //  真正影响行为的是 config.borrow() 读取的值，这已经更新了。
+    // 预览热键变化时重新注册
+    if preview_changed {
+        // 反注册旧预览热键
+        if let Some(ref old_key) = *preview_hotkey_cell.borrow() {
+            if let Some(ref mgr) = *hotkey_manager.borrow() {
+                if let Err(e) = mgr.unregister(*old_key) {
+                    log::warn!("反注册旧预览热键失败: {:?}", e);
+                } else {
+                    log::info!("已反注册旧预览热键: {}", old_preview_hotkey);
+                }
+            }
+        }
+
+        // 注册新预览热键
+        let new_phk = new_config.preview_hotkey.trim().to_string();
+        if new_phk.is_empty() {
+            *preview_hotkey_cell.borrow_mut() = None;
+            log::info!("预览热键已关闭");
+        } else {
+            match HotKey::try_from(new_phk.clone()) {
+                Ok(key) => {
+                    if let Some(ref mgr) = *hotkey_manager.borrow() {
+                        match mgr.register(key) {
+                            Ok(()) => {
+                                log::info!("新预览热键已注册: {}", new_phk);
+                                *preview_hotkey_cell.borrow_mut() = Some(key);
+                            }
+                            Err(e) => log::error!("注册新预览热键失败: {:?}", e),
+                        }
+                    }
+                }
+                Err(e) => log::error!("解析新预览热键 '{}' 失败: {:?}", new_phk, e),
+            }
+        }
+    }
+
+    // 如果没有任何热键需要，释放管理器
+    let has_any_hotkey = new_config.is_hotkey_mode()
+        || preview_hotkey_cell.borrow().is_some();
+    if !has_any_hotkey {
+        *hotkey_manager.borrow_mut() = None;
+        log::info!("无热键需要，热键管理器已释放");
+    }
 
     // 更新状态栏文字
     let mode_label = if new_config.is_hotkey_mode() {
@@ -735,18 +793,19 @@ fn do_reload_config(
 #[cfg(target_os = "windows")]
 struct ConfigWatcher {
     thread: Option<std::thread::JoinHandle<()>>,
-    thread_id: u32,
+    exit_event: windows_sys::Win32::Foundation::HANDLE,
 }
 
 #[cfg(target_os = "windows")]
 impl Drop for ConfigWatcher {
     fn drop(&mut self) {
-        use windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
-        use windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT;
-        unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, 0, 0); }
+        use windows_sys::Win32::System::Threading::SetEvent;
+        use windows_sys::Win32::Foundation::CloseHandle;
+        unsafe { SetEvent(self.exit_event); }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+        unsafe { CloseHandle(self.exit_event); }
     }
 }
 
@@ -764,9 +823,19 @@ fn start_config_watcher(
         FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
     use windows_sys::Win32::System::Threading::{
-        CreateEventW, WaitForSingleObject,
+        CreateEventW, WaitForMultipleObjects,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
+
+    // 创建退出事件（手动重置，初始无信号）
+    let exit_event: HANDLE = unsafe {
+        CreateEventW(std::ptr::null_mut(), 1, 0, std::ptr::null())
+    };
+    if exit_event.is_null() {
+        log::error!("CreateEventW (exit) 失败");
+    }
+
+    let exit_event_for_thread = exit_event as isize;
 
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
 
@@ -805,11 +874,11 @@ fn start_config_watcher(
             }
 
             // 创建事件对象用于 ReadDirectoryChangesW
-            let event: HANDLE = unsafe {
+            let change_event: HANDLE = unsafe {
                 CreateEventW(std::ptr::null_mut(), 1, 0, std::ptr::null())
             };
-            if event.is_null() {
-                log::error!("CreateEventW 失败");
+            if change_event.is_null() {
+                log::error!("CreateEventW (change) 失败");
                 unsafe { CloseHandle(dir_handle); }
                 return;
             }
@@ -817,13 +886,12 @@ fn start_config_watcher(
             let mut buffer = [0u8; 4096];
             let mut bytes_returned: u32 = 0;
 
-            let thread_id = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
-            let _ = ready_tx.send(thread_id);
+            let _ = ready_tx.send(());
 
             loop {
                 // 重置事件
                 unsafe {
-                    windows_sys::Win32::System::Threading::ResetEvent(event);
+                    windows_sys::Win32::System::Threading::ResetEvent(change_event);
                 }
 
                 // 开始监听目录变化
@@ -836,7 +904,7 @@ fn start_config_watcher(
                             OffsetHigh: 0,
                         },
                     },
-                    hEvent: event,
+                    hEvent: change_event,
                 };
 
                 let result = unsafe {
@@ -845,29 +913,29 @@ fn start_config_watcher(
                         buffer.as_mut_ptr() as *mut _,
                         buffer.len() as u32,
                         0, // watch subtree = false
-                        0x01 | 0x02 | 0x04 | 0x08 | 0x10, // FILE_NOTIFY_CHANGE_FILE_NAME | ATTRIBUTES | SIZE | LAST_WRITE | SECURITY
+                        0x01 | 0x02 | 0x04 | 0x08 | 0x10,
                         &mut bytes_returned,
                         &mut overlapped,
                         None,
                     )
                 };
 
-                // overlapped I/O：返回 0 + ERROR_IO_PENDING(997) 是正常的 pending 状态
                 if result == 0 {
                     let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
-                    if err != 997 { // ERROR_IO_PENDING
+                    if err != 997 {
                         log::error!("ReadDirectoryChangesW 失败: 错误码 {}", err);
                         break;
                     }
                 }
 
-                // 等待事件触发或 WM_QUIT（通过 PostThreadMessageW）
+                // 同时等待目录变化或退出信号
+                let handles = [change_event, exit_event_for_thread as HANDLE];
                 let wait_result = unsafe {
-                    WaitForSingleObject(event, 1000) // 1秒超时，定期检查 WM_QUIT
+                    WaitForMultipleObjects(2, handles.as_ptr(), 0, 5000)
                 };
 
                 if wait_result == WAIT_OBJECT_0 {
-                    // 通过 GetOverlappedResult 获取实际传输字节数
+                    // 目录变化
                     let mut bytes_transferred: u32 = 0;
                     let ok = unsafe {
                         windows_sys::Win32::System::IO::GetOverlappedResult(
@@ -878,7 +946,6 @@ fn start_config_watcher(
                         )
                     };
 
-                    // 检查是否是 config.json 变化
                     if ok != 0 && bytes_transferred > 0 {
                         let mut offset = 0;
                         loop {
@@ -891,7 +958,6 @@ fn start_config_watcher(
                             );
 
                             if filename == config_file_name {
-                                // 防抖：等 100ms 确认稳定
                                 std::thread::sleep(std::time::Duration::from_millis(100));
                                 log::info!("检测到配置文件变化: {}", filename);
                                 unsafe {
@@ -906,35 +972,33 @@ fn start_config_watcher(
                             offset += notify.NextEntryOffset as usize;
                         }
                     }
-                }
-
-                // 检查是否有 WM_QUIT 消息（非阻塞）
-                let mut msg: windows_sys::Win32::UI::WindowsAndMessaging::MSG = unsafe { std::mem::zeroed() };
-                unsafe {
-                    if windows_sys::Win32::UI::WindowsAndMessaging::PeekMessageW(
-                        &mut msg,
-                        std::ptr::null_mut(),
-                        0x0012, // WM_QUIT
-                        0x0012,
-                        0x0001, // PM_REMOVE
-                    ) != 0 {
-                        break;
+                } else if wait_result == WAIT_OBJECT_0 + 1 {
+                    // 退出信号
+                    // 取消可能 pending 的 I/O
+                    unsafe {
+                        windows_sys::Win32::System::IO::CancelIoEx(dir_handle, &overlapped);
                     }
+                    break;
+                }
+                // WAIT_TIMEOUT 或其他：继续循环重新提交 ReadDirectoryChangesW
+                // 先取消 pending 的 I/O
+                unsafe {
+                    windows_sys::Win32::System::IO::CancelIoEx(dir_handle, &overlapped);
                 }
             }
 
-            unsafe { CloseHandle(event); }
+            unsafe { CloseHandle(change_event); }
             unsafe { CloseHandle(dir_handle); }
             log::info!("配置文件监控线程已退出");
         })
         .expect("创建配置监控线程失败");
 
-    let thread_id = ready_rx.recv().expect("配置监控线程初始化失败");
+    ready_rx.recv().expect("配置监控线程初始化失败");
 
     log::info!("配置文件监控已启动");
     ConfigWatcher {
         thread: Some(thread),
-        thread_id,
+        exit_event,
     }
 }
 
@@ -974,9 +1038,10 @@ fn is_autostart_enabled() -> bool {
         return false;
     }
 
-    let stored: String = buf[..(buf_len as usize / 2 - 1)].iter().map(|&c| c as u8 as char).collect();
-    let exe_str = exe_path.to_str().unwrap_or("");
-    stored.contains(exe_str)
+    let char_len = (buf_len as usize / 2).saturating_sub(1);
+    let stored = String::from_utf16_lossy(&buf[..char_len]);
+    let exe_str = exe_path.to_string_lossy();
+    stored.contains(exe_str.as_ref())
 }
 
 #[cfg(target_os = "windows")]

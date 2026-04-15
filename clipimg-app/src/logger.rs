@@ -5,9 +5,11 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Mutex;
+#[cfg(not(target_os = "windows"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 从 Unix epoch 天数计算年月日
+#[cfg(not(target_os = "windows"))]
 pub fn days_to_ymd(mut days: i64) -> (u32, u32, u32) {
     let mut y = 1970i64;
     loop {
@@ -27,30 +29,38 @@ pub fn days_to_ymd(mut days: i64) -> (u32, u32, u32) {
     (y as u32, m, days as u32 + 1)
 }
 
-/// 当前本地时间格式化为 YYYY-MM-DD HH:MM:SS（UTC+8）
+/// 当前本地时间格式化为 YYYY-MM-DD HH:MM:SS
 fn now_timestamp() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let local_secs = secs + 8 * 3600;
-    let days = local_secs / 86400;
-    let tod = local_secs % 86400;
-    let (y, mo, d) = days_to_ymd(days as i64);
-    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, tod / 3600, (tod % 3600) / 60, tod % 60)
+    let (y, mo, d, h, mi, s) = local_time();
+    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, h, mi, s)
 }
 
 /// 当前本地时间格式化为 YYYYMMDD_HHmmSS（用于文件名）
 pub fn filename_timestamp() -> String {
+    let (y, mo, d, h, mi, s) = local_time();
+    format!("{:04}{:02}{:02}_{:02}{:02}{:02}", y, mo, d, h, mi, s)
+}
+
+#[cfg(target_os = "windows")]
+fn local_time() -> (u32, u32, u32, u32, u32, u32) {
+    use windows_sys::Win32::Foundation::SYSTEMTIME;
+    let mut st: SYSTEMTIME = unsafe { std::mem::zeroed() };
+    unsafe { windows_sys::Win32::System::SystemInformation::GetLocalTime(&mut st); }
+    (st.wYear as u32, st.wMonth as u32, st.wDay as u32,
+     st.wHour as u32, st.wMinute as u32, st.wSecond as u32)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn local_time() -> (u32, u32, u32, u32, u32, u32) {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let local_secs = secs + 8 * 3600;
+    let local_secs = secs + 8 * 3600; // 非 Windows 回退到 UTC+8
     let days = local_secs / 86400;
     let tod = local_secs % 86400;
     let (y, mo, d) = days_to_ymd(days as i64);
-    format!("{:04}{:02}{:02}_{:02}{:02}{:02}", y, mo, d, tod / 3600, (tod % 3600) / 60, tod % 60)
+    (y, mo, d, (tod / 3600) as u32, ((tod % 3600) / 60) as u32, (tod % 60) as u32)
 }
 
 struct FileAndConsoleLogger {

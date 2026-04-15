@@ -6,7 +6,7 @@
 
 <p align="center">WSL2 / Docker 剪贴板图片工具</p>
 
-> 当前版本：**v1.0.6**
+> 当前版本：**v1.0.7**
 
 在 Windows 截取图片后（目前自测PrintScreen键系统级截屏、QQ快捷键截屏、微信快捷键截屏均有效），在 WSL2 终端（Claude Code CLI、Codex CLI 等）里粘贴即可让多模态模型“看到”图片。
 
@@ -198,6 +198,23 @@ clipimg-app/
 ---
 
 ## 版本记录
+
+### v1.0.7
+
+- 修复非 ASCII 路径下开机自启状态检测失效（注册表 UTF-16 转换错误）
+- 修复 CF_HDROP 统一指向源文件（与用户复制行为一致）
+- 修复重启后热键输入错误路径（启动时从磁盘恢复 latest_file 扩展名）
+- 修复配置热重载未同步 ClipboardWatcher 内部配置副本
+- 修复切换到剪贴板模式时预览热键连带失效
+- 支持预览热键热更新（修改配置后无需重启）
+- 反馈环防护从布尔值改为 500ms 时间窗口
+- 修复旧配置 max_history_days 未迁移为 max_history_hours（7 天 → 168 小时）
+- 修复同秒冲突文件名格式（clip_xxx.png_1 → clip_xxx_1.png）
+- max_history_hours = 0 定义为不清理（而非立即删除所有历史）
+- 剪贴板设置函数关键格式失败时返回错误（不再静默成功）
+- is_png_file 改为只读文件头（不再加载整个文件到内存）
+- 配置监控线程改用退出 Event + CancelIoEx（修复 overlapped I/O 泄漏）
+- 日志时区从 UTC+8 硬编码改为 GetLocalTime API（自动适配系统时区）
 
 ### v1.0.6
 

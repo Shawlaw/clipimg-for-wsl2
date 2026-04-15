@@ -199,8 +199,9 @@ pub fn set_multi_format_clipboard(
         }
 
         let null_handle: HGLOBAL = std::ptr::null_mut();
+        let mut text_ok = false;
 
-        // 1. 设置 CF_UNICODETEXT（路径字符串）
+        // 1. 设置 CF_UNICODETEXT（路径字符串）— 关键格式
         let text_bytes: Vec<u16> = text_path.encode_utf16().chain(std::iter::once(0)).collect();
         let text_size = text_bytes.len() * 2;
         let text_handle: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, text_size);
@@ -209,11 +210,19 @@ pub fn set_multi_format_clipboard(
             if !ptr.is_null() {
                 std::ptr::copy_nonoverlapping(text_bytes.as_ptr(), ptr, text_bytes.len());
                 GlobalUnlock(text_handle);
-                SetClipboardData(CF_UNICODETEXT, text_handle);
+                if SetClipboardData(CF_UNICODETEXT, text_handle).is_null() {
+                    log::warn!("SetClipboardData CF_UNICODETEXT 失败: {}", std::io::Error::last_os_error());
+                } else {
+                    text_ok = true;
+                }
+            } else {
+                log::warn!("GlobalLock CF_UNICODETEXT 失败");
             }
+        } else {
+            log::warn!("GlobalAlloc CF_UNICODETEXT 失败");
         }
 
-        // 2. 设置 CF_DIB（图片 DIB 数据）
+        // 2. 设置 CF_DIB（图片 DIB 数据）— 次要格式
         let dib_size = dib_data.len();
         let dib_handle: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, dib_size);
         if dib_handle != null_handle {
@@ -221,11 +230,17 @@ pub fn set_multi_format_clipboard(
             if !ptr.is_null() {
                 std::ptr::copy_nonoverlapping(dib_data.as_ptr(), ptr, dib_data.len());
                 GlobalUnlock(dib_handle);
-                SetClipboardData(CF_DIB, dib_handle);
+                if SetClipboardData(CF_DIB, dib_handle).is_null() {
+                    log::warn!("SetClipboardData CF_DIB 失败: {}", std::io::Error::last_os_error());
+                }
+            } else {
+                log::warn!("GlobalLock CF_DIB 失败");
             }
+        } else {
+            log::warn!("GlobalAlloc CF_DIB 失败");
         }
 
-        // 3. 设置 CF_HDROP（文件拖放列表）
+        // 3. 设置 CF_HDROP（文件拖放列表）— 次要格式
         let dropfiles_size = std::mem::size_of::<DROPFILES>() + (win_path_wide.len() + 1) * 2;
         let drop_handle: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, dropfiles_size);
         if drop_handle != null_handle {
@@ -242,11 +257,21 @@ pub fn set_multi_format_clipboard(
                 std::ptr::copy_nonoverlapping(win_path_wide.as_ptr(), path_ptr, win_path_wide.len());
                 *path_ptr.add(win_path_wide.len()) = 0;
                 GlobalUnlock(drop_handle);
-                SetClipboardData(CF_HDROP, drop_handle);
+                if SetClipboardData(CF_HDROP, drop_handle).is_null() {
+                    log::warn!("SetClipboardData CF_HDROP 失败: {}", std::io::Error::last_os_error());
+                }
+            } else {
+                log::warn!("GlobalLock CF_HDROP 失败");
             }
+        } else {
+            log::warn!("GlobalAlloc CF_HDROP 失败");
         }
 
         CloseClipboard();
+
+        if !text_ok {
+            return Err("CF_UNICODETEXT 设置失败，剪贴板不可用".to_string());
+        }
     }
 
     log::info!(
@@ -399,8 +424,9 @@ pub fn set_text_and_file_clipboard(
         }
 
         let null_handle: HGLOBAL = std::ptr::null_mut();
+        let mut text_ok = false;
 
-        // 1. CF_UNICODETEXT（容器侧路径）
+        // 1. CF_UNICODETEXT（容器侧路径）— 关键格式
         let text_bytes: Vec<u16> = text_path.encode_utf16().chain(std::iter::once(0)).collect();
         let text_size = text_bytes.len() * 2;
         let text_handle: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, text_size);
@@ -409,11 +435,19 @@ pub fn set_text_and_file_clipboard(
             if !ptr.is_null() {
                 std::ptr::copy_nonoverlapping(text_bytes.as_ptr(), ptr, text_bytes.len());
                 GlobalUnlock(text_handle);
-                SetClipboardData(CF_UNICODETEXT, text_handle);
+                if SetClipboardData(CF_UNICODETEXT, text_handle).is_null() {
+                    log::warn!("SetClipboardData CF_UNICODETEXT 失败: {}", std::io::Error::last_os_error());
+                } else {
+                    text_ok = true;
+                }
+            } else {
+                log::warn!("GlobalLock CF_UNICODETEXT 失败");
             }
+        } else {
+            log::warn!("GlobalAlloc CF_UNICODETEXT 失败");
         }
 
-        // 2. CF_HDROP（Windows 侧文件路径，资源管理器可粘贴）
+        // 2. CF_HDROP（Windows 侧文件路径，资源管理器可粘贴）— 次要格式
         let dropfiles_size = std::mem::size_of::<DROPFILES>() + (win_path_wide.len() + 1) * 2;
         let drop_handle: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, dropfiles_size);
         if drop_handle != null_handle {
@@ -430,11 +464,21 @@ pub fn set_text_and_file_clipboard(
                 std::ptr::copy_nonoverlapping(win_path_wide.as_ptr(), path_ptr, win_path_wide.len());
                 *path_ptr.add(win_path_wide.len()) = 0;
                 GlobalUnlock(drop_handle);
-                SetClipboardData(CF_HDROP, drop_handle);
+                if SetClipboardData(CF_HDROP, drop_handle).is_null() {
+                    log::warn!("SetClipboardData CF_HDROP 失败: {}", std::io::Error::last_os_error());
+                }
+            } else {
+                log::warn!("GlobalLock CF_HDROP 失败");
             }
+        } else {
+            log::warn!("GlobalAlloc CF_HDROP 失败");
         }
 
         CloseClipboard();
+
+        if !text_ok {
+            return Err("CF_UNICODETEXT 设置失败，剪贴板不可用".to_string());
+        }
     }
 
     log::info!("文本+文件剪贴板已设置 (text='{}')", text_path);

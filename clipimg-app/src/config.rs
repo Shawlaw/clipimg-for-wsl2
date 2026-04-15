@@ -113,6 +113,16 @@ impl AppConfig {
                 changed = true;
             }
 
+            // 迁移 max_history_days → max_history_hours
+            if !obj.contains_key("max_history_hours") {
+                if let Some(days) = obj.remove("max_history_days").and_then(|v| v.as_u64()) {
+                    let hours = days * 24;
+                    log::warn!("max_history_days ({}) 已迁移为 max_history_hours ({})", days, hours);
+                    obj.insert("max_history_hours".to_string(), serde_json::json!(hours));
+                    changed = true;
+                }
+            }
+
             // 补充 v1.0.6 新字段
             if !obj.contains_key("max_copy_size_mb") {
                 obj.insert("max_copy_size_mb".to_string(), serde_json::json!(10));
@@ -402,7 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_old_config_missing_max_history_hours() {
+    fn test_load_old_config_migrates_max_history_days() {
         let dir = temp_dir();
         let config_path = dir.path().join("config.json");
         let old_json = r#"{
@@ -414,7 +424,12 @@ mod tests {
         fs::write(&config_path, old_json).unwrap();
 
         let config = AppConfig::load(&config_path).unwrap();
-        assert_eq!(config.max_history_hours, 1);
+        assert_eq!(config.max_history_hours, 168);
+
+        // 验证配置文件已回写迁移后的值
+        let rewritten = fs::read_to_string(&config_path).unwrap();
+        assert!(rewritten.contains("max_history_hours"));
+        assert!(!rewritten.contains("max_history_days"));
     }
 
     #[test]
