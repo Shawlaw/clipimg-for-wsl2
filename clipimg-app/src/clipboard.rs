@@ -263,14 +263,8 @@ impl ClipboardWatcher {
             return None;
         }
 
-        // 将 mtime 设为当前时间，防止源文件的旧 mtime 被保留导致被清理
-        if let Ok(f) = fs::File::open(&history_path) {
-            let _ = f.set_modified(std::time::SystemTime::now());
-        }
-
         let saved_name = history_path.file_name()?.to_str()?.to_string();
         log::info!("新文件已保存: {}", saved_name);
-        self.clean_old_files();
         Some(saved_name)
     }
 
@@ -297,6 +291,11 @@ impl ClipboardWatcher {
             if let Some(name) = self.copy_file(src_path) {
                 results.push(name);
             }
+        }
+
+        // 批量复制完成后统一清理，避免刚复制的文件被 clean_old_files 误删
+        if !results.is_empty() {
+            self.clean_old_files();
         }
 
         results
@@ -380,7 +379,8 @@ impl ClipboardWatcher {
         Ok(())
     }
 
-    /// 清理超过 max_history_hours 的历史图片
+    /// 清理超过 max_history_hours 的历史文件
+    /// 基于文件名中的时间戳判断过期（而非 mtime），避免源文件旧 mtime 导致误删
     pub fn clean_old_files(&self) -> usize {
         let max_hours = self.config.max_history_hours;
         if max_hours == 0 {
@@ -388,13 +388,13 @@ impl ClipboardWatcher {
         }
         let mut deleted = 0;
 
+        let cutoff = std::time::SystemTime::now()
+            - std::time::Duration::from_secs(max_hours as u64 * 3600);
+
         let entries = match fs::read_dir(&self.save_dir) {
             Ok(e) => e,
             Err(_) => return 0,
         };
-
-        let cutoff = std::time::SystemTime::now()
-            - std::time::Duration::from_secs(max_hours as u64 * 3600);
 
         for entry in entries.flatten() {
             let path = entry.path();
@@ -408,13 +408,12 @@ impl ClipboardWatcher {
                 continue;
             }
 
-            if let Ok(meta) = entry.metadata() {
-                if let Ok(modified) = meta.modified() {
-                    if modified < cutoff {
-                        if fs::remove_file(&path).is_ok() {
-                            log::info!("已删除过期文件: {}", name);
-                            deleted += 1;
-                        }
+            // 从文件名解析时间戳（clip_YYYYMMDD_HHmmSSmmm.ext）
+            if let Some(ts) = parse_clip_timestamp(name) {
+                if ts < cutoff {
+                    if fs::remove_file(&path).is_ok() {
+                        log::info!("已删除过期文件: {}", name);
+                        deleted += 1;
                     }
                 }
             }
@@ -433,6 +432,58 @@ impl ClipboardWatcher {
         let mut buf = [0u8; 8];
         file.read_exact(&mut buf).is_ok() && buf.starts_with(b"\x89PNG")
     }
+}
+
+/// 从 clip_YYYYMMDD_HHmmSSmmm.ext 文件名解析保存时间
+/// 返回 SystemTime，解析失败返回 None
+fn parse_clip_timestamp(filename: &str) -> Option<std::time::SystemTime> {
+    // 格式: clip_20260416_103000123.png 或 clip_20260416_103000123_1.png（冲突后缀）
+    let without_prefix = filename.strip_prefix("clip_")?;
+    let (date_str, rest) = without_prefix.split_once('_')?;
+    // date_str = "YYYYMMDD", rest = "HHmmSSmmm.png" 或 "HHmmSSmmm_1.png"
+    if date_str.len() != 8 || rest.len() < 6 {
+        return None;
+    }
+
+    let year: u32 = date_str[..4].parse().ok()?;
+    let month: u32 = date_str[4..6].parse().ok()?;
+    let day: u32 = date_str[6..8].parse().ok()?;
+    let hour: u32 = rest[..2].parse().ok()?;
+    let minute: u32 = rest[2..4].parse().ok()?;
+    let second: u32 = rest[4..6].parse().ok()?;
+
+    // 转为 Unix 时间戳
+    let days = date_to_days(year, month, day);
+    let unix_epoch_days = date_to_days(1970, 1, 1) as u64;
+    let unix_secs = (days as u64 - unix_epoch_days) * 86400
+        + (hour as u64) * 3600
+        + (minute as u64) * 60
+        + (second as u64);
+
+    Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(unix_secs))
+}
+
+/// 年月日转为天数（以公元元年为基准）
+fn date_to_days(y: u32, m: u32, d: u32) -> u32 {
+    let y = y as u64;
+    let m = m as u64;
+    let d = d as u64;
+    // 算法：将月份调整为从3月开始（3月=1, 4月=2, ..., 2月=12）
+    let a = (m as i64 + 9) % 12;
+    let ya = y - (a as u64 / 10 | 0); // 等价于除以10后取整
+    let ya = if a < 0 { ya - 1 } else { ya };
+    // 使用更简单的方法
+    let mut total_days = 0u64;
+    for yr in 1..y {
+        total_days += if yr % 4 == 0 && (yr % 100 != 0 || yr % 400 == 0) { 366 } else { 365 };
+    }
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let md: &[u64] = if leap { &[31,29,31,30,31,30,31,31,30,31,30,31] } else { &[31,28,31,30,31,30,31,31,30,31,30,31] };
+    for i in 0..(m as usize).saturating_sub(1) {
+        total_days += md[i];
+    }
+    total_days += d;
+    total_days as u32
 }
 
 /// 计算文件 MD5（独立函数，方便测试）
@@ -460,7 +511,7 @@ fn format_timestamp_from_secs_millis(secs: u64, millis: u32) -> String {
 }
 
 /// 从 Unix epoch 天数计算年月日
-fn days_to_ymd(mut days: i64) -> (u32, u32, u32) {
+pub fn days_to_ymd(mut days: i64) -> (u32, u32, u32) {
     let mut y = 1970i64;
     loop {
         let dy = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
@@ -870,16 +921,21 @@ mod tests {
         let clip_dir = env.dir.path().join(".clip");
         fs::create_dir_all(&clip_dir).unwrap();
 
-        // 创建一个过期的文件（修改时间设为 2 小时前）
+        // 创建一个过期的文件（文件名时间戳在 2 小时前）
         let old_path = clip_dir.join("clip_20260407_100000123.png");
         let img = RgbaImage::from_pixel(10, 10, Rgba([255, 0, 0, 255]));
         img.save_with_format(&old_path, ImageFormat::Png).unwrap();
 
-        let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
-        let _ = std::fs::File::open(&old_path).and_then(|f| f.set_modified(two_hours_ago));
-
         // 创建一个新文件（不会过期）
-        let new_path = clip_dir.join("clip_20260408_120000456.png");
+        // 用当前时间生成文件名
+        let now = std::time::SystemTime::now();
+        let secs = now.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let local_secs = secs + 8 * 3600;
+        let days = local_secs / 86400;
+        let tod = local_secs % 86400;
+        let (y, mo, d) = crate::clipboard::days_to_ymd(days as i64);
+        let ts = format!("{:04}{:02}{:02}_{:02}{:02}{:02}000", y, mo, d, tod/3600, (tod%3600)/60, tod%60);
+        let new_path = clip_dir.join(format!("clip_{}.png", ts));
         let img2 = RgbaImage::from_pixel(10, 10, Rgba([0, 255, 0, 255]));
         img2.save_with_format(&new_path, ImageFormat::Png).unwrap();
 
@@ -1099,8 +1155,8 @@ mod tests {
     }
 
     #[test]
-    fn test_copy_file_mtime_not_preserved() {
-        // 模拟源文件有旧 mtime，复制后不应被 clean_old_files 删除
+    fn test_copy_file_preserves_mtime_and_not_cleaned() {
+        // 模拟源文件有旧 mtime，复制后保留原始 mtime，基于文件名时间戳的清理不会误删
         let env = TestEnv::new();
         let watcher = env.watcher();
 
@@ -1110,19 +1166,17 @@ mod tests {
         let two_days_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(172800);
         let _ = std::fs::File::open(&src).and_then(|f| f.set_modified(two_days_ago));
 
-        let result = watcher.copy_file(&src);
-        assert!(result.is_some(), "文件应成功复制");
+        // 通过 copy_files 复制（走完整流程含统一清理）
+        let results = watcher.copy_files(&[src]);
+        assert_eq!(results.len(), 1, "应成功复制 1 个文件");
 
-        let saved_name = result.unwrap();
-        let saved_path = env.dir.path().join(".clip").join(&saved_name);
+        let saved_path = env.dir.path().join(".clip").join(&results[0]);
+        assert!(saved_path.exists(), "复制后的文件应存在，即使源 mtime 很旧");
 
-        // 复制后文件应存在
-        assert!(saved_path.exists(), "复制后的文件应存在");
-
-        // 运行清理，文件不应被删除（mtime 已被刷新为当前时间）
+        // 再手动调一次清理，验证不会误删
         let deleted = watcher.clean_old_files();
-        assert_eq!(deleted, 0, "刚复制的文件不应被清理");
-        assert!(saved_path.exists(), "刚复制的文件在清理后应仍然存在");
+        assert_eq!(deleted, 0, "基于文件名时间戳的清理不应删除刚复制的文件");
+        assert!(saved_path.exists(), "清理后文件应仍然存在");
     }
 
     #[test]
