@@ -263,6 +263,11 @@ impl ClipboardWatcher {
             return None;
         }
 
+        // 将 mtime 设为当前时间，防止源文件的旧 mtime 被保留导致被清理
+        if let Ok(f) = fs::File::open(&history_path) {
+            let _ = f.set_modified(std::time::SystemTime::now());
+        }
+
         let saved_name = history_path.file_name()?.to_str()?.to_string();
         log::info!("新文件已保存: {}", saved_name);
         self.clean_old_files();
@@ -282,10 +287,10 @@ impl ClipboardWatcher {
 
         for (i, src_path) in src_paths.iter().enumerate() {
             if i >= max {
+                let skipped = src_paths.len() - max;
                 log::warn!(
-                    "文件数超出上限 ({}>)，跳过剩余: {}",
-                    max,
-                    src_path.display()
+                    "文件数超出上限 ({}/{})，已跳过 {} 个文件",
+                    max, src_paths.len(), skipped
                 );
                 break;
             }
@@ -1084,10 +1089,67 @@ mod tests {
 
         let src1 = env.dir.path().join("doc1.txt");
         let src2 = env.dir.path().join("doc2.pdf");
+        let src3 = env.dir.path().join("doc3.md");
         fs::write(&src1, b"hello").unwrap();
         fs::write(&src2, b"world").unwrap();
+        fs::write(&src3, b"foo").unwrap();
 
-        let results = watcher.copy_files(&[src1, src2]);
-        assert_eq!(results.len(), 1);
+        let results = watcher.copy_files(&[src1, src2, src3]);
+        assert_eq!(results.len(), 1, "max_copy_files=1 应只保存 1 个文件");
+    }
+
+    #[test]
+    fn test_copy_file_mtime_not_preserved() {
+        // 模拟源文件有旧 mtime，复制后不应被 clean_old_files 删除
+        let env = TestEnv::new();
+        let watcher = env.watcher();
+
+        // 创建一个 mtime 为 2 天前的源文件
+        let src = env.dir.path().join("old_file.txt");
+        fs::write(&src, b"old content").unwrap();
+        let two_days_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(172800);
+        let _ = std::fs::File::open(&src).and_then(|f| f.set_modified(two_days_ago));
+
+        let result = watcher.copy_file(&src);
+        assert!(result.is_some(), "文件应成功复制");
+
+        let saved_name = result.unwrap();
+        let saved_path = env.dir.path().join(".clip").join(&saved_name);
+
+        // 复制后文件应存在
+        assert!(saved_path.exists(), "复制后的文件应存在");
+
+        // 运行清理，文件不应被删除（mtime 已被刷新为当前时间）
+        let deleted = watcher.clean_old_files();
+        assert_eq!(deleted, 0, "刚复制的文件不应被清理");
+        assert!(saved_path.exists(), "刚复制的文件在清理后应仍然存在");
+    }
+
+    #[test]
+    fn test_copy_files_batch_not_cleaned() {
+        // 批量复制多个旧 mtime 文件，全部不应被 clean_old_files 删除
+        let env = TestEnv::new();
+        let watcher = env.watcher();
+        let two_days_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(172800);
+
+        let mut srcs = Vec::new();
+        for i in 0..3 {
+            let src = env.dir.path().join(format!("old_{}.txt", i));
+            fs::write(&src, format!("content {}", i).as_bytes()).unwrap();
+            let _ = std::fs::File::open(&src).and_then(|f| f.set_modified(two_days_ago));
+            srcs.push(src);
+        }
+
+        let results = watcher.copy_files(&srcs);
+        assert_eq!(results.len(), 3, "应保存全部 3 个文件");
+
+        // 所有文件在清理后应仍然存在
+        let deleted = watcher.clean_old_files();
+        assert_eq!(deleted, 0, "批量复制的文件不应被清理");
+
+        let clip_dir = env.dir.path().join(".clip");
+        for name in &results {
+            assert!(clip_dir.join(name).exists(), "文件 {} 清理后应存在", name);
+        }
     }
 }
