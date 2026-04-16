@@ -1206,4 +1206,60 @@ mod tests {
             assert!(clip_dir.join(name).exists(), "文件 {} 清理后应存在", name);
         }
     }
+
+    #[test]
+    fn test_clean_old_files_old_timestamp_format() {
+        // 兼容旧版秒级时间戳格式（clip_YYYYMMDD_HHmmSS.ext）
+        let env = TestEnv::new();
+        let clip_dir = env.dir.path().join(".clip");
+        fs::create_dir_all(&clip_dir).unwrap();
+
+        // 旧格式过期文件（秒级时间戳，9 天前）
+        let old_path = clip_dir.join("clip_20260407_100000.png");
+        fs::write(&old_path, b"old format").unwrap();
+
+        // 旧格式未过期文件（当前时间）
+        let now = std::time::SystemTime::now();
+        let secs = now.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let local_secs = secs + 8 * 3600;
+        let days = local_secs / 86400;
+        let tod = local_secs % 86400;
+        let (y, mo, d) = days_to_ymd(days as i64);
+        let ts = format!("{:04}{:02}{:02}_{:02}{:02}{:02}", y, mo, d, tod/3600, (tod%3600)/60, tod%60);
+        let new_path = clip_dir.join(format!("clip_{}.png", ts));
+        fs::write(&new_path, b"new format old ts").unwrap();
+
+        let watcher = env.watcher();
+        let deleted = watcher.clean_old_files();
+
+        assert_eq!(deleted, 1, "应删除 1 个旧格式过期文件");
+        assert!(!old_path.exists(), "旧格式过期文件应被删除");
+        assert!(new_path.exists(), "旧格式未过期文件应保留");
+    }
+
+    #[test]
+    fn test_clean_old_files_mixed_formats() {
+        // 混合格式：旧版秒级 + 新版毫秒级，都能正确清理
+        let env = TestEnv::new();
+        let clip_dir = env.dir.path().join(".clip");
+        fs::create_dir_all(&clip_dir).unwrap();
+
+        // 旧格式过期
+        fs::write(clip_dir.join("clip_20260407_100000.png"), b"old").unwrap();
+        // 新格式过期
+        fs::write(clip_dir.join("clip_20260407_100001123.pdf"), b"old new").unwrap();
+        // 新格式未过期（当前时间）
+        let now = std::time::SystemTime::now();
+        let secs = now.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 8 * 3600;
+        let (y, mo, d) = days_to_ymd((secs / 86400) as i64);
+        let ts = format!("{:04}{:02}{:02}_{:02}{:02}{:02}456",
+            y, mo, d,
+            (secs % 86400) / 3600, ((secs % 86400) % 3600) / 60, (secs % 86400) % 60);
+        fs::write(clip_dir.join(format!("clip_{}.md", ts)), b"recent").unwrap();
+
+        let watcher = env.watcher();
+        let deleted = watcher.clean_old_files();
+
+        assert_eq!(deleted, 2, "应删除 2 个过期文件（旧格式+新格式各 1 个）");
+    }
 }
