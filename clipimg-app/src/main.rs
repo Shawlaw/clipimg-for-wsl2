@@ -459,7 +459,7 @@ fn run_app() {
                     if !watcher.borrow().check_dir_available() {
                         watcher.borrow().notify_dir_unavailable("截图");
                     } else {
-                        if let Some(saved_name) = watcher.borrow_mut().poll(&mut clipboard) {
+                        if let Some(saved_name) = watcher.borrow().poll(&mut clipboard) {
                             if !config.borrow().is_hotkey_mode() {
                                 let save_dir = watcher.borrow().save_dir.clone();
                                 let win_path = save_dir.join(&saved_name);
