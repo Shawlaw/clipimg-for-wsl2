@@ -14,52 +14,173 @@ pub struct ClipboardWatcher {
     pub save_dir: PathBuf,
     /// 上一次保存图片的 MD5，用于在内存中去重，避免盲写磁盘
     last_md5: std::cell::RefCell<Option<String>>,
-    /// 最近一次操作的容器侧完整路径（如 /workspace/.clip/latest_file.png）
-    pub latest_container_path: std::cell::RefCell<String>,
+    /// 存储目录是否可用（UNC 路径下 WSL 可能未启动）
+    dir_available: std::cell::RefCell<bool>,
+    /// 用户是否选择了"不再提醒"存储目录不可用
+    suppress_unavailable_notify: std::cell::RefCell<bool>,
+    /// 是否已通知过本次不可用（用于本次不可用期间的首次通知）
+    dir_unavailable_notified: std::cell::RefCell<bool>,
 }
 
 impl ClipboardWatcher {
     pub fn new(config: AppConfig, exe_dir: &Path) -> Self {
         let save_dir = config.resolved_save_dir(exe_dir);
-        let latest_container_path = config.resolved_output_path_for("png");
         Self {
             config,
             save_dir,
             last_md5: std::cell::RefCell::new(None),
-            latest_container_path: std::cell::RefCell::new(latest_container_path),
+            dir_available: std::cell::RefCell::new(true),
+            suppress_unavailable_notify: std::cell::RefCell::new(false),
+            dir_unavailable_notified: std::cell::RefCell::new(false),
         }
     }
 
     /// 确保保存目录存在
     pub fn ensure_dir(&self) -> Result<(), std::io::Error> {
-        fs::create_dir_all(&self.save_dir)?;
+        if let Err(e) = fs::create_dir_all(&self.save_dir) {
+            log::warn!("创建保存目录失败（可能是 UNC 路径且 WSL 未启动）: {}", e);
+            *self.dir_available.borrow_mut() = false;
+        }
         Ok(())
     }
 
-    /// 从磁盘上已存在的 latest_file.* 恢复 latest_container_path
-    pub fn sync_latest_from_disk(&self) {
-        if let Ok(entries) = fs::read_dir(&self.save_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name == "latest_file" {
-                    *self.latest_container_path.borrow_mut() =
-                        self.config.resolved_output_path_for("");
-                    log::info!("从磁盘恢复 latest_container_path: latest_file");
-                    return;
-                } else if name.starts_with("latest_file.") {
-                    let ext = name.trim_start_matches("latest_file.").to_string();
-                    let path = self.config.resolved_output_path_for(&ext);
-                    *self.latest_container_path.borrow_mut() = path;
-                    log::info!("从磁盘恢复 latest_container_path: {}", name);
-                    return;
+    /// 检查存储目录是否可访问，返回 true 表示可用
+    /// 自动检测恢复并通知用户
+    pub fn check_dir_available(&self) -> bool {
+        let available = fs::metadata(&self.save_dir)
+            .map(|m| m.is_dir())
+            .unwrap_or(false);
+
+        let was_available = *self.dir_available.borrow();
+        if available && !was_available {
+            // 恢复可用
+            *self.dir_available.borrow_mut() = true;
+            *self.suppress_unavailable_notify.borrow_mut() = false;
+            *self.dir_unavailable_notified.borrow_mut() = false;
+            log::info!("存储目录已恢复可用");
+            self.notify_dir_recovered();
+        } else if !available && was_available {
+            *self.dir_available.borrow_mut() = false;
+        }
+        available
+    }
+
+    /// 弹出恢复可用的标准 MessageBox
+    #[cfg(target_os = "windows")]
+    fn notify_dir_recovered(&self) {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        let msg: Vec<u16> = OsStr::new("存储目录已恢复")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let title: Vec<u16> = OsStr::new("clipImg")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        std::thread::spawn(move || unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
+                std::ptr::null_mut(),
+                msg.as_ptr(),
+                title.as_ptr(),
+                0x40, // MB_ICONINFORMATION
+            );
+        });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn notify_dir_recovered(&self) {}
+
+    /// 弹出不可用对话框（双按钮：确定 + 不再提醒）
+    /// operation_type: "截图" 或 "复制文件"
+    #[cfg(target_os = "windows")]
+    pub fn notify_dir_unavailable(&self, operation_type: &str) {
+        if *self.suppress_unavailable_notify.borrow() {
+            return;
+        }
+        if *self.dir_unavailable_notified.borrow() {
+            return;
+        }
+        *self.dir_unavailable_notified.borrow_mut() = true;
+
+        let msg = format!(
+            "存储目录暂不可用，请在WSL2启动后再尝试重新{}",
+            operation_type
+        );
+
+        let result = show_unavailable_dialog(&msg);
+        if result == 2 {
+            // 用户点击了"不再提醒"
+            *self.suppress_unavailable_notify.borrow_mut() = true;
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub fn notify_dir_unavailable(&self, _operation_type: &str) {}
+
+    /// 迁移旧版 latest_file.* / latest.png 为 clip_<timestamp>.<ext> 格式
+    pub fn migrate_legacy_files(&self) {
+        let entries = match fs::read_dir(&self.save_dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let should_migrate = name == "latest.png"
+                || name == "latest_file"
+                || name.starts_with("latest_file.");
+
+            if !should_migrate {
+                continue;
+            }
+
+            let path = entry.path();
+            let extension = if name == "latest.png" || name.contains(".png") {
+                "png"
+            } else if let Some(dot_pos) = name.rfind('.') {
+                &name[dot_pos + 1..]
+            } else {
+                ""
+            };
+
+            // 用 mtime 生成文件名
+            let timestamp = match fs::metadata(&path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+            {
+                Some(mtime) => {
+                    let dur = mtime
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default();
+                    format_timestamp_from_secs_millis(
+                        dur.as_secs(),
+                        dur.subsec_millis(),
+                    )
                 }
+                None => filename_timestamp(),
+            };
+
+            let new_path = self.unique_history_path(&timestamp, extension);
+            match fs::rename(&path, &new_path) {
+                Ok(()) => log::info!(
+                    "迁移旧版文件: {} → {}",
+                    name,
+                    new_path.file_name().unwrap_or_default().to_string_lossy()
+                ),
+                Err(e) => log::warn!("迁移旧版文件 {} 失败: {}", name, e),
             }
         }
     }
 
     /// 用 RGBA 像素数据轮询并保存（平台无关的核心逻辑）
-    /// 返回 true 表示有新图片保存
-    pub fn poll_with_data(&self, width: usize, height: usize, rgba: &[u8]) -> bool {
+    /// 返回 Some(saved_path) 表示有新图片保存，返回 None 表示无新内容
+    pub fn poll_with_data(&self, width: usize, height: usize, rgba: &[u8]) -> Option<String> {
+        if !self.check_dir_available() {
+            log::warn!("存储目录不可用，跳过截图保存");
+            return None;
+        }
+
         // 先在内存中计算 MD5，与上次保存的比对
         let current_md5 = {
             let mut hasher = Md5::new();
@@ -70,7 +191,7 @@ impl ClipboardWatcher {
         {
             let last = self.last_md5.borrow();
             if last.as_ref() == Some(&current_md5) {
-                return false; // 内容没变，不写磁盘
+                return None; // 内容没变，不写磁盘
             }
         }
 
@@ -80,7 +201,7 @@ impl ClipboardWatcher {
         if let Err(e) = self.save_rgba_to_png(width, height, rgba, &tmp_path) {
             log::warn!("保存临时文件失败: {}", e);
             let _ = fs::remove_file(&tmp_path);
-            return false;
+            return None;
         }
 
         let timestamp = filename_timestamp();
@@ -89,23 +210,27 @@ impl ClipboardWatcher {
         if let Err(e) = fs::rename(&tmp_path, &history_path) {
             log::warn!("重命名历史文件失败: {}", e);
             let _ = fs::remove_file(&tmp_path);
-            return false;
+            return None;
         }
-
-        self.update_latest_from_history(&history_path, "png");
 
         // 更新缓存的 MD5
         *self.last_md5.borrow_mut() = Some(current_md5);
 
-        log::info!("新图片已保存: {}", history_path.display());
+        let saved_name = history_path.file_name()?.to_str()?.to_string();
+        log::info!("新图片已保存: {}", saved_name);
         self.clean_old_files();
-        true
+        Some(saved_name)
     }
 
-    /// 从 CF_HDROP 文件复制保存
-    /// 返回 Some(ext) 表示成功保存，ext 是文件扩展名（可能为空）
+    /// 从 CF_HDROP 文件复制保存（单个文件）
+    /// 返回 Some(saved_filename) 表示成功保存
     /// 返回 None 表示跳过
     pub fn copy_file(&self, src_path: &Path) -> Option<String> {
+        if !self.check_dir_available() {
+            log::warn!("存储目录不可用，跳过文件复制");
+            return None;
+        }
+
         let file_name = src_path.file_name()?.to_str()?;
         let extension = src_path.extension()
             .and_then(|e| e.to_str())
@@ -138,71 +263,64 @@ impl ClipboardWatcher {
             return None;
         }
 
-        self.update_latest_from_history(&history_path, &extension);
-
-        log::info!("新文件已保存: {}", history_path.display());
+        let saved_name = history_path.file_name()?.to_str()?.to_string();
+        log::info!("新文件已保存: {}", saved_name);
         self.clean_old_files();
-        Some(extension)
+        Some(saved_name)
     }
 
-    /// 将历史文件更新为 latest_file
-    fn update_latest_from_history(&self, history_path: &Path, extension: &str) {
-        // 删除旧的 latest_file.*
-        self.remove_latest_file();
-
-        // 复制历史文件为 latest_file.xxx
-        let latest_name = if extension.is_empty() {
-            "latest_file".to_string()
-        } else {
-            format!("latest_file.{}", extension)
-        };
-        let latest_path = self.save_dir.join(&latest_name);
-        if let Err(e) = fs::copy(history_path, &latest_path) {
-            log::warn!("更新 {} 失败: {}", latest_name, e);
+    /// 从 CF_HDROP 批量复制多个文件
+    /// 返回成功保存的文件名列表（save_dir 下的相对文件名）
+    pub fn copy_files(&self, src_paths: &[PathBuf]) -> Vec<String> {
+        if !self.check_dir_available() {
+            log::warn!("存储目录不可用，跳过批量文件复制");
+            return Vec::new();
         }
 
-        // 更新容器侧路径
-        let container_path = self.config.resolved_output_path_for(extension);
-        *self.latest_container_path.borrow_mut() = container_path;
+        let max = self.config.max_copy_files as usize;
+        let mut results = Vec::new();
+
+        for (i, src_path) in src_paths.iter().enumerate() {
+            if i >= max {
+                log::warn!(
+                    "文件数超出上限 ({}>)，跳过剩余: {}",
+                    max,
+                    src_path.display()
+                );
+                break;
+            }
+            if let Some(name) = self.copy_file(src_path) {
+                results.push(name);
+            }
+        }
+
+        results
     }
 
-    /// 删除目录中所有 latest_file.* 文件
-    fn remove_latest_file(&self) {
-        if let Ok(entries) = fs::read_dir(&self.save_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name_str = name.to_string_lossy();
-                if name_str == "latest_file" || name_str.starts_with("latest_file.") {
-                    let _ = fs::remove_file(entry.path());
+    /// 查找 save_dir 中最新的 clip_* 文件（按 mtime 排序）
+    /// 返回 (磁盘完整路径, 文件名)
+    pub fn find_latest_clip(&self) -> Option<(PathBuf, String)> {
+        let entries = fs::read_dir(&self.save_dir).ok()?;
+        let mut latest: Option<(PathBuf, String, std::time::SystemTime)> = None;
+
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with("clip_") {
+                continue;
+            }
+            if let Ok(meta) = entry.metadata() {
+                if let Ok(mtime) = meta.modified() {
+                    if latest.as_ref().map_or(true, |(_, _, t)| mtime > *t) {
+                        latest = Some((entry.path(), name, mtime));
+                    }
                 }
             }
         }
+
+        latest.map(|(path, name, _)| (path, name))
     }
 
-    /// 迁移旧版 latest.png 为 latest_file.png
-    pub fn migrate_old_latest(&self) {
-        let old_path = self.save_dir.join("latest.png");
-        let new_path = self.save_dir.join("latest_file.png");
-
-        if !old_path.exists() {
-            return;
-        }
-
-        if new_path.exists() {
-            // latest_file.png 已存在，删除旧版残留
-            let _ = fs::remove_file(&old_path);
-            log::info!("已清理旧版 latest.png 残留");
-        } else {
-            // 重命名旧版
-            if let Err(e) = fs::rename(&old_path, &new_path) {
-                log::warn!("迁移 latest.png → latest_file.png 失败: {}", e);
-            } else {
-                log::info!("已迁移 latest.png → latest_file.png");
-            }
-        }
-    }
-
-    /// 生成唯一的历史文件路径，避免同一秒内的文件名冲突
+    /// 生成唯一的历史文件路径，避免同一时间戳内的文件名冲突
     fn unique_history_path(&self, timestamp: &str, extension: &str) -> PathBuf {
         let base_name = if extension.is_empty() {
             format!("clip_{}", timestamp)
@@ -213,7 +331,7 @@ impl ClipboardWatcher {
         if !base.exists() {
             return base;
         }
-        // 同一秒内追加序号
+        // 同一时间戳内追加序号
         for i in 1..100 {
             let name = if extension.is_empty() {
                 format!("clip_{}_{}", timestamp, i)
@@ -230,10 +348,10 @@ impl ClipboardWatcher {
 
     /// 从系统剪贴板轮询（仅 Windows）
     #[cfg(target_os = "windows")]
-    pub fn poll(&self, clipboard: &mut arboard::Clipboard) -> bool {
+    pub fn poll(&self, clipboard: &mut arboard::Clipboard) -> Option<String> {
         let image_data = match clipboard.get_image() {
             Ok(img) => img,
-            Err(_) => return false,
+            Err(_) => return None,
         };
         self.poll_with_data(image_data.width, image_data.height, &image_data.bytes)
     }
@@ -320,6 +438,42 @@ pub fn file_md5(path: &Path) -> Option<String> {
     Some(format!("{:x}", hasher.finalize()))
 }
 
+/// 将 Unix 时间戳（秒 + 毫秒）格式化为 YYYYMMDD_HHmmSSmmm
+fn format_timestamp_from_secs_millis(secs: u64, millis: u32) -> String {
+    let local_secs = secs + 8 * 3600; // UTC+8
+    let days = local_secs / 86400;
+    let tod = local_secs % 86400;
+    let (y, mo, d) = days_to_ymd(days as i64);
+    format!(
+        "{:04}{:02}{:02}_{:02}{:02}{:02}{:03}",
+        y, mo, d,
+        (tod / 3600) as u32,
+        ((tod % 3600) / 60) as u32,
+        (tod % 60) as u32,
+        millis
+    )
+}
+
+/// 从 Unix epoch 天数计算年月日
+fn days_to_ymd(mut days: i64) -> (u32, u32, u32) {
+    let mut y = 1970i64;
+    loop {
+        let dy = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
+        if days < dy { break; }
+        days -= dy;
+        y += 1;
+    }
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let md: &[u32] = if leap { &[31,29,31,30,31,30,31,31,30,31,30,31] } else { &[31,28,31,30,31,30,31,31,30,31,30,31] };
+    let mut m = 0u32;
+    for (i, &d) in md.iter().enumerate() {
+        if days < d as i64 { m = i as u32 + 1; break; }
+        days -= d as i64;
+    }
+    if m == 0 { m = 12; }
+    (y as u32, m, days as u32 + 1)
+}
+
 /// 从剪贴板读取 CF_HDROP 文件路径列表（仅 Windows）
 #[cfg(target_os = "windows")]
 pub fn read_clipboard_files() -> Option<Vec<std::path::PathBuf>> {
@@ -374,6 +528,148 @@ pub fn read_clipboard_files() -> Option<Vec<std::path::PathBuf>> {
         CloseClipboard();
 
         if files.is_empty() { None } else { Some(files) }
+    }
+}
+
+/// 弹出不可用对话框（双按钮：确定 + 不再提醒）
+/// 返回 1 = 确定，2 = 不再提醒
+#[cfg(target_os = "windows")]
+fn show_unavailable_dialog(msg: &str) -> isize {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use std::iter::once;
+
+    const WS_POPUP: u32 = 0x80000000;
+    const WS_VISIBLE: u32 = 0x10000000;
+    const WS_CAPTION: u32 = 0x00C00000;
+    const WS_SYSMENU: u32 = 0x00080000;
+    const DS_MODALFRAME: u32 = 0x80;
+    const DS_CENTER: u32 = 0x800;
+    const DS_SETFONT: u32 = 0x40;
+    const BS_DEFPUSHBUTTON: u32 = 0x01;
+    const WS_CHILD: u32 = 0x40000000;
+    const WS_TABSTOP: u32 = 0x00010000;
+    const SS_ICON: u32 = 0x00000003;
+    const IDOK: u16 = 1;
+    const IDSUPPRESS: u16 = 101;
+
+    trait BytesExt {
+        fn push_u32(&mut self, v: u32);
+        fn push_u16(&mut self, v: u16);
+        fn push_i16(&mut self, v: i16);
+        fn push_str16(&mut self, s: &str);
+        fn align4(&mut self);
+    }
+
+    impl BytesExt for Vec<u8> {
+        fn push_u32(&mut self, v: u32) { self.extend_from_slice(&v.to_ne_bytes()); }
+        fn push_u16(&mut self, v: u16) { self.extend_from_slice(&v.to_ne_bytes()); }
+        fn push_i16(&mut self, v: i16) { self.extend_from_slice(&v.to_ne_bytes()); }
+        fn push_str16(&mut self, s: &str) {
+            let w: Vec<u16> = OsStr::new(s).encode_wide().chain(once(0u16)).collect();
+            for &c in &w { self.push_u16(c); }
+        }
+        fn align4(&mut self) { while self.len() % 4 != 0 { self.push(0); } }
+    }
+
+    let mut b = Vec::new();
+
+    // DLGTEMPLATE
+    b.push_u32(WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME | DS_CENTER | DS_SETFONT);
+    b.push_u32(0);
+    b.push_u16(4); // cdit = 4 controls
+    b.push_i16(0); b.push_i16(0);
+    b.push_i16(300); b.push_i16(110);
+    b.push_u16(0); // menu
+    b.push_u16(0); // class
+    b.push_str16("clipImg");
+    b.push_u16(9); // font size
+    b.push_str16("Segoe UI");
+
+    // Control 1: Warning icon
+    b.align4();
+    b.push_u32(WS_CHILD | WS_VISIBLE | SS_ICON);
+    b.push_u32(0);
+    b.push_i16(10); b.push_i16(12); b.push_i16(32); b.push_i16(32);
+    b.push_u16(0);
+    b.push_u16(0xFFFF); b.push_u16(0x0082); // STATIC
+    b.push_u16(0xFFFF); b.push_u16(103); // IDI_WARNING
+    b.push_u16(0);
+
+    // Control 2: Message text
+    b.align4();
+    b.push_u32(WS_CHILD | WS_VISIBLE);
+    b.push_u32(0);
+    b.push_i16(50); b.push_i16(10); b.push_i16(240); b.push_i16(55);
+    b.push_u16(0);
+    b.push_u16(0xFFFF); b.push_u16(0x0082); // STATIC
+    b.push_str16(msg);
+    b.push_u16(0);
+
+    // Control 3: OK button (default)
+    b.align4();
+    b.push_u32(WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON);
+    b.push_u32(0);
+    b.push_i16(145); b.push_i16(80); b.push_i16(60); b.push_i16(20);
+    b.push_u16(IDOK);
+    b.push_u16(0xFFFF); b.push_u16(0x0080); // BUTTON
+    b.push_str16("确定");
+    b.push_u16(0);
+
+    // Control 4: "不再提醒" button
+    b.align4();
+    b.push_u32(WS_CHILD | WS_VISIBLE | WS_TABSTOP);
+    b.push_u32(0);
+    b.push_i16(210); b.push_i16(80); b.push_i16(75); b.push_i16(20);
+    b.push_u16(IDSUPPRESS);
+    b.push_u16(0xFFFF); b.push_u16(0x0080); // BUTTON
+    b.push_str16("不再提醒");
+    b.push_u16(0);
+
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::DialogBoxIndirectParamW(
+            std::ptr::null_mut(),
+            b.as_ptr() as *const _,
+            std::ptr::null_mut(),
+            Some(unavailable_dialog_proc),
+            0,
+        )
+    }
+}
+
+/// 不可用对话框过程
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn unavailable_dialog_proc(
+    hwnd: *mut std::ffi::c_void,
+    msg: u32,
+    wparam: usize,
+    _lparam: isize,
+) -> isize {
+    const WM_COMMAND: u32 = 0x0111;
+    const WM_CLOSE: u32 = 0x0010;
+    const IDOK: u16 = 1;
+    const IDSUPPRESS: u16 = 101;
+
+    match msg {
+        WM_COMMAND => {
+            let id = (wparam & 0xFFFF) as u16;
+            match id {
+                IDOK => {
+                    windows_sys::Win32::UI::WindowsAndMessaging::EndDialog(hwnd, 1);
+                    1
+                }
+                IDSUPPRESS => {
+                    windows_sys::Win32::UI::WindowsAndMessaging::EndDialog(hwnd, 2);
+                    1
+                }
+                _ => 0,
+            }
+        }
+        WM_CLOSE => {
+            windows_sys::Win32::UI::WindowsAndMessaging::EndDialog(hwnd, 1);
+            1
+        }
+        _ => 0,
     }
 }
 
@@ -441,8 +737,7 @@ mod tests {
         let rgba: Vec<u8> = vec![255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255];
         let result = watcher.poll_with_data(2, 2, &rgba);
 
-        assert!(result, "首次应该保存为新图片");
-        assert!(env.dir.path().join(".clip/latest_file.png").exists());
+        assert!(result.is_some(), "首次应该保存为新图片");
 
         let clip_dir = env.dir.path().join(".clip");
         let clip_count = fs::read_dir(&clip_dir)
@@ -465,7 +760,7 @@ mod tests {
         watcher.poll_with_data(2, 2, &rgba);
 
         let result = watcher.poll_with_data(2, 2, &rgba);
-        assert!(!result, "相同图片不应重复保存");
+        assert!(result.is_none(), "相同图片不应重复保存");
 
         let clip_dir = env.dir.path().join(".clip");
         let clip_count = fs::read_dir(&clip_dir)
@@ -487,8 +782,8 @@ mod tests {
         let red: Vec<u8> = [255u8, 0, 0, 255].repeat(4);
         let blue: Vec<u8> = [0u8, 0, 255, 255].repeat(4);
 
-        assert!(watcher.poll_with_data(2, 2, &red));
-        assert!(watcher.poll_with_data(2, 2, &blue));
+        assert!(watcher.poll_with_data(2, 2, &red).is_some());
+        assert!(watcher.poll_with_data(2, 2, &blue).is_some());
 
         let clip_dir = env.dir.path().join(".clip");
         let clip_count = fs::read_dir(&clip_dir)
@@ -520,7 +815,8 @@ mod tests {
         let name = format!("clip_{}.png", timestamp);
         assert!(name.starts_with("clip_"));
         assert!(name.ends_with(".png"));
-        assert_eq!(name.len(), 24);
+        // clip_YYYYMMDD_HHmmSSmmm.png = 4 + 1 + 8 + 1 + 6 + 3 + 4 = 27
+        assert_eq!(name.len(), 27);
     }
 
     #[test]
@@ -529,13 +825,11 @@ mod tests {
         let watcher = env.watcher();
         let clip_dir = env.dir.path().join(".clip");
 
-        env.create_test_png("latest_file.png", [255, 0, 0, 255]);
         env.create_test_png("_tmp_clip.png", [0, 255, 0, 255]);
-        env.create_test_png("clip_20260407_120000.png", [0, 0, 255, 255]);
+        env.create_test_png("clip_20260407_120000123.png", [0, 0, 255, 255]);
 
         watcher.clean_old_files();
 
-        assert!(clip_dir.join("latest_file.png").exists());
         assert!(clip_dir.join("_tmp_clip.png").exists());
     }
 
@@ -572,7 +866,7 @@ mod tests {
         fs::create_dir_all(&clip_dir).unwrap();
 
         // 创建一个过期的文件（修改时间设为 2 小时前）
-        let old_path = clip_dir.join("clip_20260407_100000.png");
+        let old_path = clip_dir.join("clip_20260407_100000123.png");
         let img = RgbaImage::from_pixel(10, 10, Rgba([255, 0, 0, 255]));
         img.save_with_format(&old_path, ImageFormat::Png).unwrap();
 
@@ -580,14 +874,9 @@ mod tests {
         let _ = std::fs::File::open(&old_path).and_then(|f| f.set_modified(two_hours_ago));
 
         // 创建一个新文件（不会过期）
-        let new_path = clip_dir.join("clip_20260408_120000.png");
+        let new_path = clip_dir.join("clip_20260408_120000456.png");
         let img2 = RgbaImage::from_pixel(10, 10, Rgba([0, 255, 0, 255]));
         img2.save_with_format(&new_path, ImageFormat::Png).unwrap();
-
-        // latest_file.png 应该保留
-        let latest = clip_dir.join("latest_file.png");
-        let img3 = RgbaImage::from_pixel(10, 10, Rgba([0, 0, 255, 255]));
-        img3.save_with_format(&latest, ImageFormat::Png).unwrap();
 
         let watcher = env.watcher();
         let deleted = watcher.clean_old_files();
@@ -595,7 +884,6 @@ mod tests {
         assert_eq!(deleted, 1, "应该只删除 1 个过期文件");
         assert!(!old_path.exists(), "过期文件应被删除");
         assert!(new_path.exists(), "未过期文件应保留");
-        assert!(latest.exists(), "latest_file.png 应始终保留");
     }
 
     #[test]
@@ -603,19 +891,15 @@ mod tests {
         let env = TestEnv::new();
         let watcher = env.watcher();
 
-        // 在临时位置创建一个测试文件
         let src = env.dir.path().join("test_doc.txt");
         fs::write(&src, b"hello world").unwrap();
 
-        let ext = watcher.copy_file(&src);
-        assert_eq!(ext, Some("txt".to_string()));
-        assert!(env.dir.path().join(".clip/latest_file.txt").exists());
-
-        // 检查容器侧路径
-        assert_eq!(
-            *watcher.latest_container_path.borrow(),
-            "/workspace/.clip/latest_file.txt"
-        );
+        let result = watcher.copy_file(&src);
+        assert!(result.is_some());
+        let name = result.unwrap();
+        assert!(name.starts_with("clip_"));
+        assert!(name.ends_with(".txt"));
+        assert!(env.dir.path().join(".clip").join(&name).exists());
     }
 
     #[test]
@@ -627,15 +911,17 @@ mod tests {
         fs::write(&src, b"all: build").unwrap();
 
         let ext = watcher.copy_file(&src);
-        assert_eq!(ext, Some("".to_string()));
-        assert!(env.dir.path().join(".clip/latest_file").exists());
+        assert!(ext.is_some());
+        let name = ext.unwrap();
+        assert!(name.starts_with("clip_"));
+        assert!(!name.contains('.'));
     }
 
     #[test]
     fn test_copy_file_too_large() {
         let env = TestEnv::new();
         let mut config = env.config.clone();
-        config.max_copy_size_mb = 0; // 0 MB limit
+        config.max_copy_size_mb = 0;
         let watcher = ClipboardWatcher::new(config, env.dir.path());
         watcher.ensure_dir().unwrap();
 
@@ -658,60 +944,59 @@ mod tests {
     }
 
     #[test]
-    fn test_migrate_old_latest() {
+    fn test_migrate_legacy_files() {
         let env = TestEnv::new();
         let clip_dir = env.dir.path().join(".clip");
         fs::create_dir_all(&clip_dir).unwrap();
 
+        // 创建旧版 latest_file.png
+        fs::write(clip_dir.join("latest_file.png"), b"old latest").unwrap();
         // 创建旧版 latest.png
-        let old = clip_dir.join("latest.png");
-        fs::write(&old, b"old latest").unwrap();
+        fs::write(clip_dir.join("latest.png"), b"very old").unwrap();
 
         let watcher = env.watcher();
-        watcher.migrate_old_latest();
+        watcher.migrate_legacy_files();
 
-        assert!(clip_dir.join("latest_file.png").exists());
+        // 旧文件应该不存在了
+        assert!(!clip_dir.join("latest_file.png").exists());
         assert!(!clip_dir.join("latest.png").exists());
+
+        // 应该有对应的 clip_* 文件
+        let clip_count = fs::read_dir(&clip_dir)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .map(|e| e.file_name().to_str().map(|n| n.starts_with("clip_")).unwrap_or(false))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(clip_count, 2);
     }
 
     #[test]
-    fn test_migrate_old_latest_both_exist() {
+    fn test_find_latest_clip() {
         let env = TestEnv::new();
         let clip_dir = env.dir.path().join(".clip");
-        fs::create_dir_all(&clip_dir).unwrap();
-
-        // 同时存在 latest.png 和 latest_file.png
-        fs::write(clip_dir.join("latest.png"), b"old").unwrap();
-        fs::write(clip_dir.join("latest_file.png"), b"new").unwrap();
-
-        let watcher = env.watcher();
-        watcher.migrate_old_latest();
-
-        // latest.png 应被删除，latest_file.png 保留
-        assert!(!clip_dir.join("latest.png").exists());
-        assert_eq!(fs::read_to_string(clip_dir.join("latest_file.png")).unwrap(), "new");
-    }
-
-    #[test]
-    fn test_latest_container_path_updated() {
-        let env = TestEnv::new();
         let watcher = env.watcher();
 
-        // 默认是 png
-        assert_eq!(
-            *watcher.latest_container_path.borrow(),
-            "/workspace/.clip/latest_file.png"
-        );
+        // 没有 clip 文件
+        assert!(watcher.find_latest_clip().is_none());
 
-        // 复制一个 txt 文件后路径改变
-        let src = env.dir.path().join("doc.txt");
-        fs::write(&src, b"test").unwrap();
-        watcher.copy_file(&src);
+        // 创建两个 clip 文件，第二个更新
+        let path1 = clip_dir.join("clip_20260416_100000123.png");
+        let img1 = RgbaImage::from_pixel(10, 10, Rgba([255, 0, 0, 255]));
+        img1.save_with_format(&path1, ImageFormat::Png).unwrap();
+        let one_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let _ = std::fs::File::open(&path1).and_then(|f| f.set_modified(one_hour_ago));
 
-        assert_eq!(
-            *watcher.latest_container_path.borrow(),
-            "/workspace/.clip/latest_file.txt"
-        );
+        let path2 = clip_dir.join("clip_20260416_110000456.png");
+        let img2 = RgbaImage::from_pixel(10, 10, Rgba([0, 255, 0, 255]));
+        img2.save_with_format(&path2, ImageFormat::Png).unwrap();
+
+        let result = watcher.find_latest_clip();
+        assert!(result.is_some());
+        let (_, name) = result.unwrap();
+        assert_eq!(name, "clip_20260416_110000456.png");
     }
 
     #[test]
@@ -720,13 +1005,12 @@ mod tests {
         let clip_dir = env.dir.path().join(".clip");
         fs::create_dir_all(&clip_dir).unwrap();
 
-        // 创建过期的 png 和 pdf 文件
-        let old_png = clip_dir.join("clip_20260407_100000.png");
+        let old_png = clip_dir.join("clip_20260407_100000123.png");
         fs::write(&old_png, b"png data").unwrap();
         let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
         let _ = std::fs::File::open(&old_png).and_then(|f| f.set_modified(two_hours_ago));
 
-        let old_pdf = clip_dir.join("clip_20260407_100001.pdf");
+        let old_pdf = clip_dir.join("clip_20260407_100001456.pdf");
         fs::write(&old_pdf, b"pdf data").unwrap();
         let _ = std::fs::File::open(&old_pdf).and_then(|f| f.set_modified(two_hours_ago));
 
@@ -742,15 +1026,13 @@ mod tests {
         let clip_dir = env.dir.path().join(".clip");
         fs::create_dir_all(&clip_dir).unwrap();
 
-        // 创建同名文件模拟冲突
-        fs::write(clip_dir.join("clip_20260415_120000.pdf"), b"first").unwrap();
+        fs::write(clip_dir.join("clip_20260415_120000123.pdf"), b"first").unwrap();
 
         let watcher = env.watcher();
-        let path = watcher.unique_history_path("20260415_120000", "pdf");
-        // 序号应在扩展名前：clip_20260415_120000_1.pdf
+        let path = watcher.unique_history_path("20260415_120000123", "pdf");
         assert_eq!(
             path.file_name().unwrap().to_str().unwrap(),
-            "clip_20260415_120000_1.pdf"
+            "clip_20260415_120000123_1.pdf"
         );
     }
 
@@ -762,8 +1044,7 @@ mod tests {
         let clip_dir = env.dir.path().join(".clip");
         fs::create_dir_all(&clip_dir).unwrap();
 
-        // 创建一个过期文件
-        let old_path = clip_dir.join("clip_20260407_100000.png");
+        let old_path = clip_dir.join("clip_20260407_100000123.png");
         let img = RgbaImage::from_pixel(10, 10, Rgba([255, 0, 0, 255]));
         img.save_with_format(&old_path, ImageFormat::Png).unwrap();
         let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
@@ -778,44 +1059,35 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_latest_from_disk_pdf() {
+    fn test_copy_files_multiple() {
         let env = TestEnv::new();
-        let clip_dir = env.dir.path().join(".clip");
-        fs::create_dir_all(&clip_dir).unwrap();
-
-        // 模拟磁盘上已有 latest_file.pdf
-        fs::write(clip_dir.join("latest_file.pdf"), b"pdf data").unwrap();
-
         let watcher = env.watcher();
-        // 默认路径是 png
-        assert_eq!(
-            *watcher.latest_container_path.borrow(),
-            "/workspace/.clip/latest_file.png"
-        );
 
-        watcher.sync_latest_from_disk();
+        let src1 = env.dir.path().join("doc1.txt");
+        let src2 = env.dir.path().join("doc2.pdf");
+        fs::write(&src1, b"hello").unwrap();
+        fs::write(&src2, b"world").unwrap();
 
-        // 同步后应为 pdf
-        assert_eq!(
-            *watcher.latest_container_path.borrow(),
-            "/workspace/.clip/latest_file.pdf"
-        );
+        let results = watcher.copy_files(&[src1, src2]);
+        assert_eq!(results.len(), 2);
+        assert!(results[0].ends_with(".txt"));
+        assert!(results[1].ends_with(".pdf"));
     }
 
     #[test]
-    fn test_sync_latest_from_disk_no_extension() {
+    fn test_copy_files_respects_max() {
         let env = TestEnv::new();
-        let clip_dir = env.dir.path().join(".clip");
-        fs::create_dir_all(&clip_dir).unwrap();
+        let mut config = env.config.clone();
+        config.max_copy_files = 1;
+        let watcher = ClipboardWatcher::new(config, env.dir.path());
+        watcher.ensure_dir().unwrap();
 
-        fs::write(clip_dir.join("latest_file"), b"no ext").unwrap();
+        let src1 = env.dir.path().join("doc1.txt");
+        let src2 = env.dir.path().join("doc2.pdf");
+        fs::write(&src1, b"hello").unwrap();
+        fs::write(&src2, b"world").unwrap();
 
-        let watcher = env.watcher();
-        watcher.sync_latest_from_disk();
-
-        assert_eq!(
-            *watcher.latest_container_path.borrow(),
-            "/workspace/.clip/latest_file"
-        );
+        let results = watcher.copy_files(&[src1, src2]);
+        assert_eq!(results.len(), 1);
     }
 }

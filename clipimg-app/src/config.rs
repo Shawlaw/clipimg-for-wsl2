@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 fn default_max_history_hours() -> u32 { 1 }
 fn default_max_log_size_mb() -> u32 { 1 }
 fn default_max_copy_size_mb() -> u32 { 10 }
+fn default_max_copy_files() -> u32 { 10 }
 fn default_preview_hotkey() -> String { "Ctrl+Alt+P".to_string() }
 fn default_blocked_preview_ext() -> Vec<String> { Vec::new() }
 fn default_show_startup_notification() -> bool { true }
@@ -27,6 +28,9 @@ pub struct AppConfig {
     /// CF_HDROP 文件最大允许大小（MB），超过则跳过
     #[serde(default = "default_max_copy_size_mb")]
     pub max_copy_size_mb: u32,
+    /// 单次 CF_HDROP 最多处理的文件数，超过则跳过
+    #[serde(default = "default_max_copy_files")]
+    pub max_copy_files: u32,
     /// 预览快捷键，如 "Ctrl+Alt+P"，空字符串表示不启用
     #[serde(default = "default_preview_hotkey")]
     pub preview_hotkey: String,
@@ -48,6 +52,7 @@ impl Default for AppConfig {
             max_history_hours: 1,
             max_log_size_mb: 1,
             max_copy_size_mb: 10,
+            max_copy_files: 10,
             preview_hotkey: "Ctrl+Alt+P".to_string(),
             blocked_preview_ext: Vec::new(),
             show_startup_notification: true,
@@ -140,6 +145,12 @@ impl AppConfig {
                 obj.insert("show_startup_notification".to_string(), serde_json::json!(true));
                 changed = true;
             }
+
+            // 补充 v1.0.8 新字段
+            if !obj.contains_key("max_copy_files") {
+                obj.insert("max_copy_files".to_string(), serde_json::json!(10));
+                changed = true;
+            }
         }
 
         if changed {
@@ -181,20 +192,10 @@ impl AppConfig {
         self.output_path.trim_end_matches('/')
     }
 
-    /// 获取容器侧完整文件路径（自动拼接 /latest_file.xxx）
-    /// extension 为空时不含后缀（如 latest_file），否则含后缀（如 latest_file.png）
-    pub fn resolved_output_path_for(&self, extension: &str) -> String {
-        let dir = self.output_dir();
-        if extension.is_empty() {
-            format!("{}/latest_file", dir)
-        } else {
-            format!("{}/latest_file.{}", dir, extension)
-        }
-    }
-
-    /// 获取容器侧完整文件路径（默认 latest_file.png，向后兼容）
-    pub fn resolved_output_path(&self) -> String {
-        self.resolved_output_path_for("png")
+    /// 给定 save_dir 下的文件名，返回容器侧完整路径
+    /// 即 `output_path/filename`
+    pub fn container_path_for(&self, filename: &str) -> String {
+        format!("{}/{}", self.output_dir(), filename)
     }
 
     /// 解析 save_dir 为绝对路径
@@ -208,21 +209,16 @@ impl AppConfig {
         }
     }
 
-    /// 获取 latest_file.png 的 Windows 侧完整路径（截图/DIB 场景）
-    pub fn latest_file_path(&self, exe_dir: &Path) -> PathBuf {
-        self.resolved_save_dir(exe_dir).join("latest_file.png")
-    }
-
-    /// 获取 latest_file.png 的 Windows 侧完整路径（向后兼容别名）
-    pub fn latest_png_path(&self, exe_dir: &Path) -> PathBuf {
-        self.latest_file_path(exe_dir)
-    }
 }
 
-/// 检测 Windows 风格绝对路径（如 C:\、E:\）
+/// 检测 Windows 风格绝对路径（如 C:\、E:\）或 UNC 路径（如 \\wsl$\...）
 fn is_windows_absolute(path: &str) -> bool {
     let bytes = path.as_bytes();
-    bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/')
+    if bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/') {
+        return true;
+    }
+    // UNC 路径：\\server\share...
+    bytes.starts_with(b"\\\\")
 }
 
 #[cfg(test)]
@@ -331,43 +327,22 @@ mod tests {
     }
 
     #[test]
-    fn test_latest_file_path() {
-        let config = AppConfig {
-            save_dir: ".clip".to_string(),
-            ..Default::default()
-        };
-        let exe_dir = Path::new("/workspace/clipImg");
-        let latest = config.latest_file_path(exe_dir);
-        assert_eq!(latest, PathBuf::from("/workspace/clipImg/.clip/latest_file.png"));
-    }
-
-    #[test]
-    fn test_resolved_output_path() {
+    fn test_container_path_for() {
         let config = AppConfig {
             output_path: "/workspace/.clip".to_string(),
             ..Default::default()
         };
-        assert_eq!(config.resolved_output_path(), "/workspace/.clip/latest_file.png");
+        assert_eq!(config.container_path_for("clip_20260416_103000123.png"), "/workspace/.clip/clip_20260416_103000123.png");
+        assert_eq!(config.container_path_for("clip_20260416_103500456.pdf"), "/workspace/.clip/clip_20260416_103500456.pdf");
     }
 
     #[test]
-    fn test_resolved_output_path_trailing_slash() {
+    fn test_container_path_for_trailing_slash() {
         let config = AppConfig {
             output_path: "/workspace/.clip/".to_string(),
             ..Default::default()
         };
-        assert_eq!(config.resolved_output_path(), "/workspace/.clip/latest_file.png");
-    }
-
-    #[test]
-    fn test_resolved_output_path_for() {
-        let config = AppConfig {
-            output_path: "/workspace/.clip".to_string(),
-            ..Default::default()
-        };
-        assert_eq!(config.resolved_output_path_for("png"), "/workspace/.clip/latest_file.png");
-        assert_eq!(config.resolved_output_path_for("pdf"), "/workspace/.clip/latest_file.pdf");
-        assert_eq!(config.resolved_output_path_for(""), "/workspace/.clip/latest_file");
+        assert_eq!(config.container_path_for("clip_20260416_103000123.png"), "/workspace/.clip/clip_20260416_103000123.png");
     }
 
     #[test]
@@ -446,5 +421,28 @@ mod tests {
 
         let config = AppConfig::load(&config_path).unwrap();
         assert_eq!(config.max_history_hours, 4);
+    }
+
+    #[test]
+    fn test_resolved_save_dir_unc_path() {
+        let config = AppConfig {
+            save_dir: "\\\\wsl$\\debian\\home\\user\\.clip".to_string(),
+            ..Default::default()
+        };
+        let exe_dir = Path::new("/some/path/clipImg");
+        let resolved = config.resolved_save_dir(exe_dir);
+        assert_eq!(
+            resolved,
+            PathBuf::from("\\\\wsl$\\debian\\home\\user\\.clip")
+        );
+    }
+
+    #[test]
+    fn test_is_windows_absolute_unc() {
+        assert!(is_windows_absolute("\\\\wsl$\\debian\\home\\user\\.clip"));
+        assert!(is_windows_absolute("\\\\wsl.localhost\\debian\\home\\user\\.clip"));
+        assert!(is_windows_absolute("C:\\Users\\test"));
+        assert!(!is_windows_absolute(".clip"));
+        assert!(!is_windows_absolute("/home/user/.clip"));
     }
 }

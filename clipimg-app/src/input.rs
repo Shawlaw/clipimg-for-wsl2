@@ -485,6 +485,99 @@ pub fn set_text_and_file_clipboard(
     Ok(())
 }
 
+/// 设置 CF_UNICODETEXT + CF_HDROP（多文件）到剪贴板
+///
+/// 终端 Ctrl+V 得到多行容器路径，资源管理器 Ctrl+V 粘贴保存的文件副本
+#[cfg(target_os = "windows")]
+pub fn set_multi_file_clipboard(
+    text_paths: &str,
+    win_file_paths: &[std::path::PathBuf],
+) -> Result<(), String> {
+    log::debug!(
+        "set_multi_file_clipboard: text='{}', files={}",
+        text_paths.trim(),
+        win_file_paths.len()
+    );
+
+    // 构建多文件 CF_HDROP 数据：每个路径 null 终止，最后额外一个 null
+    let mut paths_data: Vec<u16> = Vec::new();
+    for path in win_file_paths {
+        let wide: Vec<u16> = path.to_str().unwrap_or("").encode_utf16().chain(std::iter::once(0)).collect();
+        paths_data.extend_from_slice(&wide);
+    }
+    paths_data.push(0); // 双 null 终止
+
+    unsafe {
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
+            return Err(format!("OpenClipboard 失败: {}", std::io::Error::last_os_error()));
+        }
+
+        if EmptyClipboard() == 0 {
+            CloseClipboard();
+            return Err(format!("EmptyClipboard 失败: {}", std::io::Error::last_os_error()));
+        }
+
+        let null_handle: HGLOBAL = std::ptr::null_mut();
+        let mut text_ok = false;
+
+        // 1. CF_UNICODETEXT（容器侧多行路径）— 关键格式
+        let text_bytes: Vec<u16> = text_paths.encode_utf16().chain(std::iter::once(0)).collect();
+        let text_size = text_bytes.len() * 2;
+        let text_handle: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, text_size);
+        if text_handle != null_handle {
+            let ptr = GlobalLock(text_handle) as *mut u16;
+            if !ptr.is_null() {
+                std::ptr::copy_nonoverlapping(text_bytes.as_ptr(), ptr, text_bytes.len());
+                GlobalUnlock(text_handle);
+                if SetClipboardData(CF_UNICODETEXT, text_handle).is_null() {
+                    log::warn!("SetClipboardData CF_UNICODETEXT 失败: {}", std::io::Error::last_os_error());
+                } else {
+                    text_ok = true;
+                }
+            } else {
+                log::warn!("GlobalLock CF_UNICODETEXT 失败");
+            }
+        } else {
+            log::warn!("GlobalAlloc CF_UNICODETEXT 失败");
+        }
+
+        // 2. CF_HDROP（多文件路径列表）— 次要格式
+        let dropfiles_size = std::mem::size_of::<DROPFILES>() + paths_data.len() * 2;
+        let drop_handle: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, dropfiles_size);
+        if drop_handle != null_handle {
+            let ptr = GlobalLock(drop_handle) as *mut u8;
+            if !ptr.is_null() {
+                let df = DROPFILES {
+                    pFiles: std::mem::size_of::<DROPFILES>() as u32,
+                    pt: (0, 0),
+                    fNC: 0,
+                    fWide: 1,
+                };
+                std::ptr::write(ptr as *mut DROPFILES, df);
+                let path_ptr = ptr.add(std::mem::size_of::<DROPFILES>()) as *mut u16;
+                std::ptr::copy_nonoverlapping(paths_data.as_ptr(), path_ptr, paths_data.len());
+                GlobalUnlock(drop_handle);
+                if SetClipboardData(CF_HDROP, drop_handle).is_null() {
+                    log::warn!("SetClipboardData CF_HDROP 失败: {}", std::io::Error::last_os_error());
+                }
+            } else {
+                log::warn!("GlobalLock CF_HDROP 失败");
+            }
+        } else {
+            log::warn!("GlobalAlloc CF_HDROP 失败");
+        }
+
+        CloseClipboard();
+
+        if !text_ok {
+            return Err("CF_UNICODETEXT 设置失败，剪贴板不可用".to_string());
+        }
+    }
+
+    log::info!("多文件剪贴板已设置 ({} 个文件)", win_file_paths.len());
+    Ok(())
+}
+
 #[cfg(not(target_os = "windows"))]
 pub fn set_text_clipboard(_text: &str) -> Result<(), String> {
     Err("剪贴板操作仅在 Windows 上可用".to_string())
@@ -494,6 +587,14 @@ pub fn set_text_clipboard(_text: &str) -> Result<(), String> {
 pub fn set_text_and_file_clipboard(
     _text_path: &str,
     _win_file_path: &std::path::Path,
+) -> Result<(), String> {
+    Err("剪贴板操作仅在 Windows 上可用".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_multi_file_clipboard(
+    _text_paths: &str,
+    _win_file_paths: &[std::path::PathBuf],
 ) -> Result<(), String> {
     Err("剪贴板操作仅在 Windows 上可用".to_string())
 }

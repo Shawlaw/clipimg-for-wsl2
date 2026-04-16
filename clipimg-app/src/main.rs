@@ -152,7 +152,7 @@ fn run_app() {
     let config = Rc::new(RefCell::new(config));
     let watcher = ClipboardWatcher::new(config.borrow().clone(), &exe_dir);
     if let Err(e) = watcher.ensure_dir() {
-        fatal_error(&format!("创建保存目录失败: {}", e));
+        log::warn!("创建保存目录失败（可能是 UNC 路径且 WSL 未启动）: {}", e);
     }
     let watcher = Rc::new(RefCell::new(watcher));
 
@@ -161,11 +161,8 @@ fn run_app() {
         log::info!("启动清理: 已删除 {} 个过期文件", deleted);
     }
 
-    // 迁移旧版 latest.png → latest_file.png
-    watcher.borrow().migrate_old_latest();
-
-    // 从磁盘恢复 latest_container_path（重启后保持正确的扩展名）
-    watcher.borrow().sync_latest_from_disk();
+    // 迁移旧版 latest_file.* / latest.png → clip_* 格式
+    watcher.borrow().migrate_legacy_files();
 
     // 仅在热键模式下注册全局热键
     let hotkey_manager: Rc<RefCell<Option<GlobalHotKeyManager>>> = if config.borrow().is_hotkey_mode() {
@@ -411,29 +408,44 @@ fn run_app() {
             } else {
                 // 先检查 CF_HDROP（文件复制）
                 let hdrop_handled = if let Some(files) = clipboard::read_clipboard_files() {
-                    if let Some(first_file) = files.into_iter().next() {
-                        let is_png = clipboard::ClipboardWatcher::is_png_file(&first_file);
-                        if watcher.borrow().copy_file(&first_file).is_some() {
-                            if !config.borrow().is_hotkey_mode() {
-                                let container_path = watcher.borrow().latest_container_path.borrow().clone();
-                                if is_png {
+                    if !files.is_empty() {
+                        // 检查目录可用性
+                        if !watcher.borrow().check_dir_available() {
+                            watcher.borrow().notify_dir_unavailable("复制文件");
+                        } else {
+                            let saved_names = watcher.borrow().copy_files(&files);
+                            if !saved_names.is_empty() && !config.borrow().is_hotkey_mode() {
+                                let save_dir = watcher.borrow().save_dir.clone();
+                                // 构建多行文本：每行一个容器路径，末尾空行
+                                let mut text_paths = String::new();
+                                let mut win_paths = Vec::new();
+                                for name in &saved_names {
+                                    text_paths.push_str(&config.borrow().container_path_for(name));
+                                    text_paths.push('\n');
+                                    win_paths.push(save_dir.join(name));
+                                }
+                                // 判断是否有 PNG（用于 CF_DIB）
+                                let first_saved = save_dir.join(&saved_names[0]);
+                                let is_png = clipboard::ClipboardWatcher::is_png_file(&first_saved);
+
+                                if saved_names.len() == 1 && is_png {
+                                    // 单个 PNG 文件：设置完整多格式剪贴板（含 CF_DIB）
                                     log::info!("设置多格式剪贴板 (PNG)...");
-                                    match input::set_multi_format_clipboard(&container_path, &first_file) {
+                                    match input::set_multi_format_clipboard(&text_paths, &first_saved) {
                                         Ok(()) => { last_self_set_time = Some(std::time::Instant::now()); log::info!("多格式剪贴板设置成功"); }
                                         Err(e) => log::error!("多格式剪贴板设置失败: {}", e),
                                     }
                                 } else {
-                                    log::info!("设置文本+文件剪贴板: {}", container_path);
-                                    match input::set_text_and_file_clipboard(&container_path, &first_file) {
+                                    // 多文件或非 PNG：设置文本 + 多文件 CF_HDROP
+                                    log::info!("设置文本+文件剪贴板: {} 个文件", saved_names.len());
+                                    match input::set_multi_file_clipboard(&text_paths, &win_paths) {
                                         Ok(()) => { last_self_set_time = Some(std::time::Instant::now()); log::info!("文本+文件剪贴板设置成功"); }
                                         Err(e) => log::error!("文本+文件剪贴板设置失败: {}", e),
                                     }
                                 }
                             }
-                            true
-                        } else {
-                            false
                         }
+                        true
                     } else {
                         false
                     }
@@ -443,15 +455,24 @@ fn run_app() {
 
                 // CF_HDROP 未处理时走 DIB 流程
                 if !hdrop_handled {
-                    let has_new = watcher.borrow_mut().poll(&mut clipboard);
-                    if has_new && !config.borrow().is_hotkey_mode() {
-                        let win_path = config.borrow().latest_file_path(&exe_dir);
-                        if win_path.exists() {
-                            let container_path = watcher.borrow().latest_container_path.borrow().clone();
-                            log::info!("设置多格式剪贴板...");
-                            match input::set_multi_format_clipboard(&container_path, &win_path) {
-                                Ok(()) => { last_self_set_time = Some(std::time::Instant::now()); log::info!("多格式剪贴板设置成功"); }
-                                Err(e) => log::error!("多格式剪贴板设置失败: {}", e),
+                    // 检查目录可用性
+                    if !watcher.borrow().check_dir_available() {
+                        watcher.borrow().notify_dir_unavailable("截图");
+                    } else {
+                        if let Some(saved_name) = watcher.borrow_mut().poll(&mut clipboard) {
+                            if !config.borrow().is_hotkey_mode() {
+                                let save_dir = watcher.borrow().save_dir.clone();
+                                let win_path = save_dir.join(&saved_name);
+                                if win_path.exists() {
+                                    let container_path = config.borrow().container_path_for(&saved_name);
+                                    log::info!("设置多格式剪贴板...");
+                                    // 截图路径也追加空行
+                                    let text_path = format!("{}\n", container_path);
+                                    match input::set_multi_format_clipboard(&text_path, &win_path) {
+                                        Ok(()) => { last_self_set_time = Some(std::time::Instant::now()); log::info!("多格式剪贴板设置成功"); }
+                                        Err(e) => log::error!("多格式剪贴板设置失败: {}", e),
+                                    }
+                                }
                             }
                         }
                     }
@@ -467,27 +488,25 @@ fn run_app() {
                 let is_input = config.borrow().is_hotkey_mode();
 
                 if is_preview {
-                    // 预览热键：用系统默认程序打开 latest_file
+                    // 预览热键：用系统默认程序打开最新 clip_* 文件
                     log::info!("预览热键触发");
-                    let save_dir = config.borrow().resolved_save_dir(&exe_dir);
-                    if let Some(latest) = find_latest_file(&save_dir) {
-                        if is_executable_file(&latest, &config.borrow().blocked_preview_ext) {
-                            log::warn!("预览已拦截：可执行文件不允许通过预览打开 ({})", latest.display());
+                    if let Some((disk_path, _name)) = watcher.borrow().find_latest_clip() {
+                        if is_executable_file(&disk_path, &config.borrow().blocked_preview_ext) {
+                            log::warn!("预览已拦截：可执行文件不允许通过预览打开 ({})", disk_path.display());
                         } else {
                             let _ = std::process::Command::new("cmd")
-                                .args(["/c", "start", "", &latest.to_string_lossy()])
+                                .args(["/c", "start", "", &disk_path.to_string_lossy()])
                                 .spawn();
-                            log::info!("已打开: {}", latest.display());
+                            log::info!("已打开: {}", disk_path.display());
                         }
                     } else {
                         log::warn!("没有最新文件，请先复制文件或截图");
                     }
                 } else if is_input {
-                    // 输入热键：发送路径
+                    // 输入热键：发送最新 clip_* 的容器路径
                     log::info!("热键触发: {}", config.borrow().hotkey);
-                    let container_path = watcher.borrow().latest_container_path.borrow().clone();
-                    let save_dir = config.borrow().resolved_save_dir(&exe_dir);
-                    if find_latest_file(&save_dir).is_some() {
+                    if let Some((_disk_path, name)) = watcher.borrow().find_latest_clip() {
+                        let container_path = config.borrow().container_path_for(&name);
                         log::info!("发送路径: {}", container_path);
                         match input::send_text_with_ime(&container_path) {
                             Ok(()) => log::info!("路径已发送"),
@@ -567,19 +586,6 @@ fn get_exe_dir() -> std::path::PathBuf {
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
-}
-
-/// 在 save_dir 中查找 latest_file.* 文件
-#[cfg(target_os = "windows")]
-fn find_latest_file(save_dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    let entries = std::fs::read_dir(save_dir).ok()?;
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name == "latest_file" || name.starts_with("latest_file.") {
-            return Some(entry.path());
-        }
-    }
-    None
 }
 
 /// 显示启动提示弹窗（MessageBoxW，零额外依赖）

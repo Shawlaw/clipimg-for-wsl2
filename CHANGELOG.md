@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## v1.0.8
+
+- **去掉 latest_file 机制，支持连续粘贴**：每次截图/复制产生唯一路径（`clip_<timestamp>.<ext>`），不再覆盖历史路径
+- **文件名时间戳精度提升到毫秒级**：`clip_YYYYMMDD_HHmmSSmmm.<ext>`，进一步降低冲突概率
+- **多文件 CF_HDROP 粘贴**：从资源管理器复制多个文件，一次性保存并写入多行路径到剪贴板（每行一个路径 + 末尾空行）
+- **max_copy_files 配置项**：限制单次最多处理的文件数（默认 10），防止误复制大量文件导致卡顿
+- **UNC 路径支持**：`\\wsl$\...` 和 `\\wsl.localhost\...` 格式的 save_dir 可正常使用
+- **UNC 不可用容错**：WSL 未启动时截图/复制不崩溃，自动跳过并弹窗提示；WSL 启动后自动恢复并通知用户
+- **升级兼容**：启动时自动将旧版 `latest_file.*` / `latest.png` 按 mtime 重命名为 `clip_*` 格式
+
 ## v1.0.7
 
 - 修复非 ASCII 路径下开机自启状态检测失效（注册表 UTF-16 转换错误）
