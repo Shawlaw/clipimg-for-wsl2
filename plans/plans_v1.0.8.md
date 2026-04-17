@@ -1,6 +1,6 @@
 # v1.0.8 实施计划
 
-> 解决用户反馈的核心痛点：连续粘贴多个图片/文件时路径互相覆盖；评估多文件粘贴与 UNC 路径支持。
+> 解决用户反馈的核心痛点：连续粘贴多个图片/文件时路径互相覆盖；多文件粘贴支持；UNC 路径支持。
 
 ## 背景
 
@@ -26,7 +26,7 @@
 
 | 功能 | 现状（依赖 latest_file） | 改后 |
 |------|--------------------------|------|
-| 截图写入剪贴板 | 写 `latest_file.<ext>` 路径 | 写 `clip_<ts>.<ext>` 路径 |
+| 截图写入剪贴板 | 写 `latest_file.<ext>` 路径 | 写 `clip_<ts>.<ext>` 路径 + 末尾换行 |
 | 去重比对 | 内存 `last_md5`，不变 | 不变 |
 | 热键模式 | 模拟输入 `latest_container_path` | 模拟输入最新 `clip_*` 路径 |
 | 预览热键 | 打开 `latest_file` | 打开最新的 `clip_*` 文件 |
@@ -45,10 +45,24 @@
 - 改动点：`logger.rs` 中 `filename_timestamp()` 拼接毫秒部分（Windows 侧 `SYSTEMTIME.wMilliseconds` 已可用）
 - 冲突后缀不变（`_1`、`_2`…），毫秒精度下冲突概率极低，现有的文件存在性检测兜底
 
+### 路径末尾换行
+
+截图/复制后写入剪贴板的文本路径末尾追加一个换行符（`\n`），确保用户粘贴后可以直接继续输入，无需手动 Shift+Enter 换行：
+- 截图：`format!("{}\n", container_path)` → `/workspace/.clip/clip_20260416_103000123.png\n`
+- 多文件复制：每行一个路径，末尾自然带换行（最后一个路径后也有 `\n`）
+
+### 历史文件清理策略
+
+`clean_old_files()` 改用文件名中的时间戳判断过期，不再依赖文件 mtime：
+- **原因**：`fs::copy()` 在 Windows 上保留源文件 mtime，如果源文件 mtime 很旧，刚复制的文件会被立即清理掉；修改 mtime 又等同于篡改文件元数据，不合理
+- **实现**：`parse_clip_timestamp()` 从文件名 `clip_YYYYMMDD_HHmmSSmmm.ext` 中解析出 `YYYYMMDD` 和 `HHmmSS`（取前 6 位），转为 Unix 时间戳后与 `cutoff` 比较
+- **兼容性**：同时兼容旧版秒级格式（`clip_YYYYMMDD_HHmmSS.ext`），因为解析时只取时间部分的前 6 位（HHmmSS），毫秒部分不影响判断
+- **清理时机**：`copy_file()` 不再内部调用 `clean_old_files()`，由 `copy_files()` 在批量复制完成后统一调用一次，避免刚复制的文件被误删
+
 ### 涉及文件
 
-- `clipboard.rs`：删除 `latest_file` 相关方法和 `latest_container_path` 字段，`poll()` / `copy_file()` 返回实际路径，新增 `find_latest_clip()` 方法
-- `input.rs`：`set_multi_format_clipboard()` 路径参数变化
+- `clipboard.rs`：删除 `latest_file` 相关方法和 `latest_container_path` 字段，`poll()` / `copy_file()` 返回实际文件名，新增 `find_latest_clip()`、`copy_files()`、`parse_clip_timestamp()`、`migrate_legacy_files()` 方法
+- `input.rs`：新增 `set_multi_file_clipboard()` 函数用于多文件剪贴板设置
 - `main.rs`：剪贴板模式接收返回路径、热键/预览改用 `find_latest_clip()`、删除 `find_latest_file()` 和所有 `latest_file` 引用、删除 `sync_latest_from_disk()` / `migrate_old_latest()` 调用
 - `config.rs`：删除 `resolved_output_path_for()`、`resolved_output_path()`、`latest_file_path()`、`latest_png_path()`，新增 `container_path_for()`
 - `first_run.rs`：无需改动
@@ -58,30 +72,36 @@
 #### Step 1：clipboard.rs 改造
 - 删除 `update_latest_from_history()`、`remove_latest_file()`、`migrate_old_latest()`、`sync_latest_from_disk()`
 - 删除 `latest_container_path` 字段（所有需要路径的地方改为从方法返回值或 `find_latest_clip()` 获取）
-- 新增 `find_latest_clip()` 方法：扫描 save_dir，按 **mtime** 降序排列，返回最新的 `clip_*` 文件路径
-- `poll()`：返回类型改为 `Option<String>`，返回实际保存的 `clip_<ts>.<ext>` 完整路径（而非 `latest_file` 路径）；无新内容时返回 `None`
-- `copy_file()`：返回 `Option<String>`，返回实际保存的文件完整路径
-- `clean_old_files()`：无需改动（原来只匹配 `clip_*` 前缀，不涉及 `latest_file` 的显式排除）
+- 新增 `find_latest_clip()` 方法：扫描 save_dir，按 **mtime** 降序排列，返回最新的 `clip_*` 文件路径（磁盘路径 + 文件名）
+- `poll()`：返回类型改为 `Option<String>`，返回实际保存的文件名（不含目录）；无新内容时返回 `None`
+- `copy_file()`：返回 `Option<String>`，返回实际保存的文件名（不含目录）；不再内部调用 `clean_old_files()`
+- 新增 `copy_files()`：批量复制多个文件，末尾统一调用 `clean_old_files()`，超出 `max_copy_files` 时输出跳过总数
+- `clean_old_files()`：改用 `parse_clip_timestamp()` 解析文件名时间戳判断过期，不再依赖 mtime
 
 #### Step 1.5：升级兼容——迁移旧版 `latest_file.*` / `latest.png`
-- 启动时扫描 save_dir，将 `latest_file`、`latest_file.*`、`latest.png` 按 mtime 重命名为 `clip_<timestamp>.<ext>` 格式，保留文件
+- 新增 `migrate_legacy_files()` 方法：启动时扫描 save_dir，将 `latest_file`、`latest_file.*`、`latest.png` 按 mtime 重命名为 `clip_<timestamp>.<ext>` 格式，保留文件
 - 每次启动都执行，无残留时秒过无开销；有残留时重命名后下次不再命中
-- 重命名冲突处理：若目标文件名已存在，在时间戳后追加 `_1`、`_2`… 后缀
+- 重命名冲突处理：若目标文件名已存在，在时间戳后追加 `_1`、`_2`… 后缀（复用 `unique_history_path()`）
 
 #### Step 2：config.rs 适配
 - 删除 `resolved_output_path_for()`、`resolved_output_path()`、`latest_file_path()`、`latest_png_path()`
 - 新增 `container_path_for(filename)` 方法：给定 save_dir 下的文件名，返回 `output_path/filename`（即 `format!("{}/{}", output_path, filename)`）
 
 #### Step 3：main.rs 适配
-- 剪贴板模式：接收 `poll()` / `copy_file()` 返回的实际路径，调用 `config.container_path_for()` 得到容器路径，传入 `set_multi_format_clipboard()`
+- 剪贴板模式 HDROP 流程：调用 `copy_files()` 批量保存，根据文件数量和类型选择 `set_multi_format_clipboard()`（单 PNG）或 `set_multi_file_clipboard()`（多文件/非 PNG）
+- 剪贴板模式 DIB 流程：接收 `poll()` 返回的文件名，调用 `config.container_path_for()` 得到容器路径，追加 `\n` 后传入 `set_multi_format_clipboard()`
 - 热键模式：调用 `find_latest_clip()` 获取最新 `clip_*` 的容器路径，模拟输入
 - 预览热键：调用 `find_latest_clip()` 获取最新 `clip_*` 的磁盘路径，打开文件
-- 启动恢复：`sync_latest_from_disk()` 不再需要，删除调用；`migrate_old_latest()` 同步删除
+- 启动恢复：`sync_latest_from_disk()` / `migrate_old_latest()` 替换为 `migrate_legacy_files()`
 - 删除 `find_latest_file()` 辅助函数
 - 删除所有 `latest_container_path`、`latest_file` 相关引用
 
-#### Step 4：测试 + 文档
-- 补充单元测试：`find_latest_clip()`、连续截图路径唯一性、启动恢复
+#### Step 4：input.rs 适配
+- 新增 `set_multi_file_clipboard(text_paths, win_file_paths)`：设置 CF_UNICODETEXT（多行文本路径）+ CF_HDROP（多文件），用于多文件复制场景
+- 保留 `set_text_and_file_clipboard()` 用于单文件非 PNG 场景
+
+#### Step 5：测试 + 文档
+- 补充单元测试：`find_latest_clip()`、连续截图路径唯一性、启动恢复（`migrate_legacy_files`）、`copy_files()` 批量保存、`clean_old_files()` 文件名时间戳解析（含旧版秒级格式兼容）
 - 更新 CHANGELOG.md
 - 更新 README.md 版本号
 
@@ -91,22 +111,32 @@
 
 ### 核心改动
 
-- `read_clipboard_files()` 处理所有文件（目前只处理第一个）
-- 所有文件复制到 save_dir，上限由配置项 `max_copy_files` 控制，默认 10；超出部分跳过并 warn 日志
-- 剪贴板 CF_UNICODETEXT 写入多行路径（每行一个），末尾追加一个空行，方便用户继续输入
+- `read_clipboard_files()` 返回所有文件路径（原来只处理第一个）
+- 所有文件通过 `copy_files()` 批量复制到 save_dir，上限由配置项 `max_copy_files` 控制，默认 10；超出部分跳过并 warn 日志（输出跳过总数）
+- 剪贴板 CF_UNICODETEXT 写入多行路径（每行一个），末尾自然带换行，方便用户继续输入
 - 示例：复制 2 个文件后，剪贴板文本为：
   ```
-  /home/user/.clip/clip_20260416_103000.png
-  /home/user/.clip/clip_20260416_103500.pdf
-
+  /home/user/.clip/clip_20260416_103000123.png
+  /home/user/.clip/clip_20260416_103500456.pdf
   ```
+  （每个路径后一个 `\n`，最后一个路径的 `\n` 充当末尾空行）
 
 ### 设计说明
 
 - Agent 收到多个文件路径后会自行查看所有文件，无需特殊处理
-- 末尾空行确保用户粘贴后可以直接继续输入，无需手动 Shift+Enter 换行
-- 单文件粘贴行为不受影响（仍然只有一行路径 + 一个空行）
+- 末尾换行确保用户粘贴后可以直接继续输入，无需手动 Shift+Enter 换行
+- 单文件粘贴行为也追加末尾换行（截图和文件复制统一行为）
 - `max_copy_files` 配置项防止用户误复制大量文件（如整个目录）导致卡顿，默认 10
+- 剪贴板格式选择逻辑：
+  - 单个 PNG 文件 → `set_multi_format_clipboard()`（含 CF_UNICODETEXT + CF_DIB + CF_HDROP）
+  - 多文件或非 PNG → `set_multi_file_clipboard()`（含 CF_UNICODETEXT + 多文件 CF_HDROP）
+
+### 涉及文件
+
+- `clipboard.rs`：新增 `copy_files()` 批量复制方法
+- `input.rs`：新增 `set_multi_file_clipboard()` 多文件剪贴板设置函数
+- `config.rs`：新增 `max_copy_files` 配置字段（默认 10），`migrate_config()` 自动迁移旧配置
+- `main.rs`：HDROP 处理改为调用 `copy_files()`，根据结果选择剪贴板格式
 
 ---
 
@@ -133,32 +163,34 @@
 UNC 路径依赖 WSL 实例先启动，clipImg 开机自启时可能早于 WSL 就绪：
 
 **启动时容忍失败：**
-- `ClipboardWatcher::new()` 中 `create_dir_all(&save_dir)` 失败 → warn 日志，不 panic
-- 本地路径几乎不会出现此问题，但 UNC 路径在 WSL 未启动时会触发
+- `ClipboardWatcher::ensure_dir()` 中 `create_dir_all(&save_dir)` 失败 → warn 日志，不 panic
+- 设置 `dir_available = false`，本地路径几乎不会出现此问题，但 UNC 路径在 WSL 未启动时会触发
 
 **运行时懒重试：**
-- `poll()` / `copy_file()` 保存文件前，检查 save_dir 是否可访问
-- 不可访问 → warn 日志 + 跳过本次操作
+- `poll_with_data()` / `copy_files()` 保存文件前，调用 `check_dir_available()` 检查 save_dir 是否可访问
+- 不可访问 → warn 日志 + 弹出通知 + 跳过本次操作
 - 下次剪贴板事件触发时自然重试，WSL 启动后自动恢复
 
 **用户通知：**
-- 每次保存失败都弹出对话框（⚠️ warning 图标）提示用户（不能用气泡通知，高版本 Windows 已废弃）
+- 不可用时弹出自定义对话框（⚠️ warning 图标）提示用户（不能用气泡通知，高版本 Windows 已废弃）
 - 对话框两个按钮：
   - 「确定」— 关闭对话框，下次失败继续提醒
-  - 「不再提醒」— 置位 `suppress_unavailable_notify: bool`，后续失败不再弹窗
-- 恢复可用时弹出标准 `MessageBox`（ℹ️ info 图标，仅「确定」按钮）通知用户，同时重置 `suppress_unavailable_notify`- 措辞：
+  - 「不再提醒」— 置位 `suppress_unavailable_notify`，后续失败不再弹窗
+- 恢复可用时弹出标准 `MessageBox`（ℹ️ info 图标，仅「确定」按钮）通知用户，同时重置 `suppress_unavailable_notify`
+- 措辞：
   - 不可用：「存储目录暂不可用，请在WSL2启动后再尝试重新截图」（根据本次实际操作类型显示"截图"或"复制文件"）
   - 恢复：「存储目录已恢复」
-- 实现方式：不可用对话框需使用 `TaskDialog` 或自定义对话框（参考 `first_run.rs` 现有模式）以支持自定义按钮文字；恢复通知直接用标准 `MessageBox`
+- 实现方式：不可用对话框使用 `DialogBoxIndirectParamW` 自定义对话框（参考 `first_run.rs` 现有模式）以支持自定义按钮文字；恢复通知直接用标准 `MessageBox`
 
 ### 涉及文件
 
-- `config.rs`：`is_windows_absolute()` 增加 UNC 路径识别
-- `clipboard.rs`：`new()` 容忍目录创建失败，`poll()` / `copy_file()` 增加目录可用性检查
-- `first_run.rs`：路径配置提示文案适配
+- `config.rs`：`is_windows_absolute()` 增加 UNC 路径识别（`\\` 前缀）
+- `clipboard.rs`：新增 `check_dir_available()`、`notify_dir_unavailable()`、`notify_dir_recovered()` 方法；`ensure_dir()` 容忍目录创建失败；新增 `dir_available`、`suppress_unavailable_notify`、`dir_unavailable_notified` 状态字段
+- `main.rs`：剪贴板事件处理中增加目录可用性检查和通知调用
 
 ### 注意事项
 
 - UNC 路径性能可能略低于本地盘（跨 9P 协议），但图片文件影响不大
 - 不依赖 `wslpath` 工具做路径转换，避免用户环境差异
 - `std::fs` 在 Windows 上原生支持 UNC 路径读写
+- `first_run.rs` 无需改动（路径配置提示文案中 UNC 路径的说明已足够）
