@@ -17,10 +17,12 @@
   - **剪贴板模式**（默认）：截图后自动设置多格式剪贴板，Ctrl+V / Shift+Insert 直接粘贴路径
   - **热键模式**：按自定义热键自动输入路径，不碰剪贴板
 - **系统托盘**：右键菜单可打开配置/日志、打开图片目录、开机自启开关、退出
-- **文件复制**：支持从资源管理器 Ctrl+C 复制文件，自动保存并设置剪贴板路径
+- **连续粘贴**：每次截图/复制产生唯一文件（`clip_<timestamp>.<ext>`），不再覆盖，支持连续粘贴多张图
+- **文件复制**：支持从资源管理器 Ctrl+C 复制文件（含多文件），自动保存并设置剪贴板路径
 - **预览快捷键**：按快捷键（默认 `Ctrl+Alt+P`）用系统默认程序打开最新文件
 - **智能去重**：文件大小 + MD5 两级去重，相同图片不重复保存
-- **历史清理**：自动清理超过指定小时数的旧文件（`latest_file.*` 始终保留）
+- **UNC 路径**：`save_dir` 支持 `\\wsl$\...` 等 UNC 格式，WSL 未启动时容错提示
+- **历史清理**：自动清理超过指定小时数的旧文件（基于文件名时间戳判断）
 - **单 EXE**：无运行时依赖，约 1MB，双击即用（无控制台黑框）
 
 ---
@@ -45,6 +47,7 @@
   "max_history_hours": 1,
   "max_log_size_mb": 1,
   "max_copy_size_mb": 10,
+  "max_copy_files": 10,
   "preview_hotkey": "Ctrl+Alt+P",
   "blocked_preview_ext": [],
   "show_startup_notification": true
@@ -70,11 +73,12 @@
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | `hotkey` | `""` | 全局热键。**空字符串 = 剪贴板模式**，设置值则启用热键模式（如 `"Alt+Insert"`、`"Ctrl+Shift+V"`） |
-| `output_path` | `/workspace/.clip` | 粘贴/输入到终端的目录路径（容器侧，自动拼接 `/latest_file.xxx`） |
-| `save_dir` | `.clip` | 图片在 Windows 侧的保存目录。相对路径基于 EXE 所在目录，也支持绝对路径（需转义符号"\\"）如 `E:\\workspace\\.clip` |
-| `max_history_hours` | `1` | 历史文件最大保留小时数（`latest_file.*` 始终保留） |
+| `output_path` | `/workspace/.clip` | 粘贴/输入到终端的目录路径（容器侧，自动拼接 `/clip_<timestamp>.<ext>`） |
+| `save_dir` | `.clip` | 图片在 Windows 侧的保存目录。相对路径基于 EXE 所在目录，也支持绝对路径（如 `E:\\workspace\\.clip`）和 UNC 路径（如 `\\\\wsl$\\debian\\home\\.clip`） |
+| `max_history_hours` | `1` | 历史文件最大保留小时数（基于文件名时间戳判断，设为 `0` 不清理） |
 | `max_log_size_mb` | `1` | 日志文件最大大小（MB），超过后自动轮转 |
 | `max_copy_size_mb` | `10` | Ctrl+C 复制文件的最大允许大小（MB），超过则跳过 |
+| `max_copy_files` | `10` | 单次 Ctrl+C 最多处理的文件数，超过则跳过 |
 | `preview_hotkey` | `"Ctrl+Alt+P"` | 预览快捷键，打开最新文件。空字符串 `""` 关闭预览功能 |
 | `blocked_preview_ext` | `[]` | 预览时拦截的文件后缀名列表（与内置黑名单取并集），如 `["dll", "reg"]` |
 | `show_startup_notification` | `true` | 启动时是否显示提示弹窗 |
@@ -91,7 +95,7 @@
 
 | 粘贴到哪里 | 得到什么 |
 |-----------|---------|
-| WSL 终端（Ctrl+V / Shift+Insert） | 文件路径字符串（如 `/workspace/.clip/latest_file.png`） |
+| WSL 终端（Ctrl+V / Shift+Insert） | 文件路径字符串（如 `/workspace/.clip/clip_20260418_103000123.png`） |
 | 画图等图片应用（Ctrl+V） | 截图图片 |
 | 资源管理器 / 文件对话框（Ctrl+V） | 文件副本 |
 
@@ -183,7 +187,7 @@ clipimg-app/
 **截图后粘贴/按键没有路径**
 - 确认托盘图标存在
 - 确认 `config.json` 格式正确
-- 确认 `.clip/latest_file.*` 存在：先在 Windows 里复制一张图，等 1-2 秒再试
+- 确认 `.clip/clip_*` 文件存在：先在 Windows 里复制一张图，等 1-2 秒再试
 
 **粘贴出来的路径在容器内找不到文件**
 - 确认 WSL 挂载路径正确
