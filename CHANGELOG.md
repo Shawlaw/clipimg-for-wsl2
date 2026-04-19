@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v1.0.9
+
+- **修复 CF_HDROP 指向源文件**：v1.0.8 重构多文件支持时丢失了 v1.0.7 的修复，导致从资源管理器复制文件后粘贴得到的是 `.clip` 副本而非源文件。新增 `build_file_clipboard_params` 辅助函数文档化不变式（CF_UNICODETEXT 用容器路径，CF_HDROP 用源文件路径），并补充回归测试
+
 ## v1.0.8
 
 - **去掉 latest_file 机制，支持连续粘贴**：每次截图/复制产生唯一路径（`clip_<timestamp>.<ext>`），不再覆盖历史路径
