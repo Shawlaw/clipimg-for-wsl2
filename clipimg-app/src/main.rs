@@ -416,29 +416,26 @@ fn run_app() {
                             let saved_names = watcher.borrow().copy_files(&files);
                             if !saved_names.is_empty() && !config.borrow().is_hotkey_mode() {
                                 let save_dir = watcher.borrow().save_dir.clone();
-                                // 构建多行文本：每行一个容器路径，末尾空行
-                                let mut text_paths = String::new();
-                                let mut win_paths = Vec::new();
-                                for name in &saved_names {
-                                    text_paths.push_str(&config.borrow().container_path_for(name));
-                                    text_paths.push('\n');
-                                    win_paths.push(save_dir.join(name));
-                                }
+                                // CF_UNICODETEXT 用容器路径，CF_HDROP 用源文件路径
+                                let (text_paths, hdrop_paths) = build_file_clipboard_params(
+                                    &files, &saved_names, &config.borrow(),
+                                );
                                 // 判断是否有 PNG（用于 CF_DIB）
                                 let first_saved = save_dir.join(&saved_names[0]);
                                 let is_png = clipboard::ClipboardWatcher::is_png_file(&first_saved);
 
                                 if saved_names.len() == 1 && is_png {
                                     // 单个 PNG 文件：设置完整多格式剪贴板（含 CF_DIB）
+                                    // CF_DIB 从源文件读取（与 .clip 副本内容相同），CF_HDROP 指向源文件
                                     log::info!("设置多格式剪贴板 (PNG)...");
-                                    match input::set_multi_format_clipboard(&text_paths, &first_saved) {
+                                    match input::set_multi_format_clipboard(&text_paths, &files[0]) {
                                         Ok(()) => { last_self_set_time = Some(std::time::Instant::now()); log::info!("多格式剪贴板设置成功"); }
                                         Err(e) => log::error!("多格式剪贴板设置失败: {}", e),
                                     }
                                 } else {
-                                    // 多文件或非 PNG：设置文本 + 多文件 CF_HDROP
+                                    // 多文件或非 PNG：设置文本 + 多文件 CF_HDROP（指向源文件）
                                     log::info!("设置文本+文件剪贴板: {} 个文件", saved_names.len());
-                                    match input::set_multi_file_clipboard(&text_paths, &win_paths) {
+                                    match input::set_multi_file_clipboard(&text_paths, &hdrop_paths) {
                                         Ok(()) => { last_self_set_time = Some(std::time::Instant::now()); log::info!("文本+文件剪贴板设置成功"); }
                                         Err(e) => log::error!("文本+文件剪贴板设置失败: {}", e),
                                     }
@@ -1121,6 +1118,25 @@ fn remove_autostart() {
     }
 }
 
+/// 文件复制场景下构建剪贴板参数
+///
+/// 不变式：CF_UNICODETEXT 使用容器侧路径（.clip 下的文件名），
+/// CF_HDROP 使用源文件路径（用户在资源管理器中复制的原始文件）。
+/// 这样在资源管理器粘贴时得到的是源文件，而不是 .clip 目录下的副本。
+fn build_file_clipboard_params(
+    source_files: &[std::path::PathBuf],
+    saved_names: &[String],
+    config: &config::AppConfig,
+) -> (String, Vec<std::path::PathBuf>) {
+    let mut text_paths = String::new();
+    for name in saved_names {
+        text_paths.push_str(&config.container_path_for(name));
+        text_paths.push('\n');
+    }
+    // CF_HDROP 指向源文件，而非 .clip 副本
+    (text_paths, source_files.to_vec())
+}
+
 /// 判断文件是否为可执行文件（预览时拦截，防止误运行）
 /// 内置黑名单与用户自定义黑名单取并集
 #[cfg(target_os = "windows")]
@@ -1138,4 +1154,57 @@ fn is_executable_file(path: &std::path::Path, user_blocked: &[String]) -> bool {
         return true;
     }
     user_blocked.iter().any(|b| b.eq_ignore_ascii_case(&ext))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::config::AppConfig;
+    use std::path::PathBuf;
+
+    /// 回归测试：CF_HDROP 必须指向源文件，不能指向 .clip 副本
+    /// 源自 v1.0.8 重构多文件支持时丢失了 v1.0.7 的修复
+    #[test]
+    fn test_hdrop_uses_source_files_not_clip_copies() {
+        let config = AppConfig {
+            output_path: "/workspace/.clip".to_string(),
+            ..Default::default()
+        };
+
+        let source_files = vec![
+            PathBuf::from(r"C:\Users\test\photo.png"),
+            PathBuf::from(r"C:\Users\test\doc.pdf"),
+        ];
+        let saved_names = vec![
+            "clip_20260419_100000123.png".to_string(),
+            "clip_20260419_100000456.pdf".to_string(),
+        ];
+
+        let (text_paths, hdrop_paths) =
+            super::build_file_clipboard_params(&source_files, &saved_names, &config);
+
+        // CF_UNICODETEXT 使用容器路径
+        assert!(text_paths.contains("/workspace/.clip/clip_20260419_100000123.png"));
+        assert!(text_paths.contains("/workspace/.clip/clip_20260419_100000456.pdf"));
+
+        // CF_HDROP 指向源文件
+        assert_eq!(hdrop_paths, source_files);
+    }
+
+    /// 单文件场景也要验证
+    #[test]
+    fn test_hdrop_single_file_uses_source() {
+        let config = AppConfig {
+            output_path: "/home/user/.clip".to_string(),
+            ..Default::default()
+        };
+
+        let source_files = vec![PathBuf::from(r"D:\screenshots\shot.png")];
+        let saved_names = vec!["clip_20260419_120000789.png".to_string()];
+
+        let (text_paths, hdrop_paths) =
+            super::build_file_clipboard_params(&source_files, &saved_names, &config);
+
+        assert!(text_paths.contains("/home/user/.clip/clip_20260419_120000789.png"));
+        assert_eq!(hdrop_paths[0], PathBuf::from(r"D:\screenshots\shot.png"));
+    }
 }
