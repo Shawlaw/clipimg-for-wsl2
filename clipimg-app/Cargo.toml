@@ -1,6 +1,6 @@
 [package]
 name = "clipimg"
-version = "1.0.8"
+version = "1.0.9"
 edition = "2021"
 description = "Clipboard image watcher + hotkey paste tool for Docker/WSL2 workflows"
 
