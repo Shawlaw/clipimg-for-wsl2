@@ -39,6 +39,48 @@
 - 优先翻译英文（覆盖面最广），可考虑用 `rust-i18n` 或 `fluent-rs` 等 crate
 - 日志可选语言（开发调试用英文，用户日志用配置语言）
 
+### 16. SSH 使用模式 — SFTP 自动上传
+
+**现状**：clipImg 目前仅支持 WSL2/Docker 场景（通过 `\\wsl$\` 或共享目录桥接文件系统）。但许多用户通过 SSH 连接远程服务器使用 agent CLI（如 Claude Code、Codex），远程服务器与本地 Windows 没有共享文件系统，导致 agent 无法"看到"用户截图或复制的文件。
+
+**目标**：让 SSH 用户也能获得截图→粘贴→agent 读取的一站式体验，与 WSL2 模式零感知差异。
+
+**方案**：clipImg 内置 SFTP 上传能力。截图/复制文件后，自动通过 SSH 上传到远程服务器指定目录，剪贴板放入远程路径（如 `/home/user/.clip/clip_xxx.png`）。用户在远程终端粘贴后，agent 直接读取本地文件。
+
+```
+Windows (clipImg)                Remote Server
+┌──────────────────┐    SFTP upload (SSH key)           ┌──────────────────┐
+│  截图 → 保存文件   │ ────────────────────────────────▶ │  /home/user/.clip/ │
+│  剪贴板=远程路径   │                                   │  clip_xxx.png    │
+└──────────────────┘                                   └──────────────────┘
+```
+
+**配置示例**：
+```json
+{
+  "ssh_upload": {
+    "enabled": true,
+    "host": "dev.example.com",
+    "port": 22,
+    "user": "foo",
+    "ssh_key": "C:\\Users\\foo\\.ssh\\id_rsa",
+    "remote_dir": "/home/foo/.clip"
+  }
+}
+```
+
+**实现思路**：
+- 使用 `ssh2` crate 实现 SFTP 上传（Rust 生态成熟，支持 cross-compile 到 Windows）
+- 截图/复制文件后，在保存本地文件的同时异步上传到远程服务器
+- 剪贴板中的路径格式根据模式切换：WSL2 模式放 WSL 路径，SSH 模式放远程路径
+- 支持连接失败重试、超时处理、连接状态托盘提示
+- 可选：支持多个 SSH 目标（多台服务器切换）
+- 可选：利用 SSH Agent 转发避免硬编码密钥路径
+
+**备选方案**（已排除）：
+- HTTP 文件服务器 + SSH 反向隧道：需要手动配置 tunnel，且依赖 agent 支持 HTTP fetch，兼容性差
+- 手动 SCP：用户操作成本高，不符合 clipImg 零摩擦哲学
+
 ### 10. 便携模式 vs 安装模式区分
 
 **现状**：配置和日志都在 EXE 旁边的 `.clip` 目录，属于便携模式。如果用户放到 Program Files 下，可能没有写入权限。
@@ -63,4 +105,5 @@
 | P1 | 14. 热键模式响应延迟 | 影响使用体验 | 待实现 | | |
 | P1 | 12. SmartScreen 拦截 | 影响首次使用体验 | 待实现 | | |
 | P2 | 15. 国际化（i18n） | 扩展非中文用户群 | 待实现 | | |
+| P1 | 16. SSH 使用模式（SFTP 上传） | 扩展 SSH 远程使用场景 | 待实现 | | |
 | P3 | 10. 便携/安装模式 | 边缘场景 | 待实现 | | |
