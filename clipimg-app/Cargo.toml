@@ -1,10 +1,14 @@
 [package]
 name = "clipimg"
-version = "1.0.9"
+version = "1.0.10"
 edition = "2021"
 description = "Clipboard image watcher + hotkey paste tool for Docker/WSL2 workflows"
 
 [dependencies]
+desktop-config = { git = "https://github.com/Shawlaw/DeskFoundry", tag = "v0.1.0", package = "desktop-config" }
+desktop-fs = { git = "https://github.com/Shawlaw/DeskFoundry", tag = "v0.1.0", package = "desktop-fs" }
+desktop-i18n = { git = "https://github.com/Shawlaw/DeskFoundry", tag = "v0.1.0", package = "desktop-i18n" }
+desktop-logger = { git = "https://github.com/Shawlaw/DeskFoundry", tag = "v0.1.0", package = "desktop-logger" }
 image = { version = "0.25", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## v1.0.10
+
+- 切换公共基础能力到公开的 [DeskFoundry](https://github.com/Shawlaw/DeskFoundry) monorepo GitHub 依赖
+- `desktop-logger`、`desktop-config`、`desktop-i18n`、`desktop-fs` 现在统一从共享 SDK 获取
+- 版本号提升到 `1.0.10`
+
 ## v1.0.9
 
 - **修复 CF_HDROP 指向源文件**：v1.0.8 重构多文件支持时丢失了 v1.0.7 的修复，导致从资源管理器复制文件后粘贴得到的是 `.clip` 副本而非源文件。新增 `build_file_clipboard_params` 辅助函数文档化不变式（CF_UNICODETEXT 用容器路径，CF_HDROP 用源文件路径），并补充回归测试

@@ -11,13 +11,18 @@ fn main() {
 
     // 生成 ICO（包含 256x256，PNG-based）
     let img256 = img.resize_exact(256, 256, FilterType::Lanczos3);
-    img256.save_with_format(out_dir.join("icon.ico"), image::ImageFormat::Ico)
+    img256
+        .save_with_format(out_dir.join("icon.ico"), image::ImageFormat::Ico)
         .expect("保存 ICO 失败");
 
     // 生成各尺寸 PNG
     for &size in &[16, 32, 48, 64, 128, 256] {
         let resized = img.resize_exact(size, size, FilterType::Lanczos3);
-        resized.save_with_format(out_dir.join(format!("icon_{}.png", size)), image::ImageFormat::Png)
+        resized
+            .save_with_format(
+                out_dir.join(format!("icon_{}.png", size)),
+                image::ImageFormat::Png,
+            )
             .expect("保存 PNG 失败");
     }
 

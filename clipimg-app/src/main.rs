@@ -1,6 +1,9 @@
 // Windows 子系统：默认 WINDOWS（无控制台），编译时启用 console feature 保留控制台
 // 注意：必须在 non-windows 平台不设置，否则编译失败
-#![cfg_attr(all(target_os = "windows", not(feature = "console")), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(target_os = "windows", not(feature = "console")),
+    windows_subsystem = "windows"
+)]
 
 fn main() {
     run_app();
@@ -12,7 +15,6 @@ mod clipboard_listener;
 mod config;
 #[cfg(target_os = "windows")]
 mod input;
-mod logger;
 
 #[cfg(target_os = "windows")]
 mod first_run;
@@ -121,13 +123,18 @@ fn run_app() {
     // 先确保保存目录存在（日志文件要写到这里）
     let save_dir = config.resolved_save_dir(&exe_dir);
     if let Err(e) = std::fs::create_dir_all(&save_dir) {
-        fatal_error(&format!("创建保存目录失败: {}\n目录: {}", e, save_dir.display()));
+        fatal_error(&format!(
+            "创建保存目录失败: {}\n目录: {}",
+            e,
+            save_dir.display()
+        ));
     }
 
     // 初始化日志和 panic handler
     let log_path = save_dir.join(".clipimg.log");
-    logger::init(&log_path, console_mode, config.max_log_size_mb);
-    logger::set_panic_hook(&log_path);
+    desktop_logger::init(&log_path, console_mode, config.max_log_size_mb)
+        .unwrap_or_else(|err| fatal_error(&format!("初始化日志失败: {}", err)));
+    desktop_logger::set_panic_hook(&log_path);
 
     let mode_name = if config.is_hotkey_mode() {
         "热键模式 (方案 A)"
@@ -141,6 +148,7 @@ fn run_app() {
     if console_mode {
         log::info!("控制台模式: 已启用 (--console)");
     }
+    log::info!("系统语言: {}", desktop_i18n::detect_system_language());
     log::info!("配置文件: {}", config_path.display());
     log::info!("保存目录: {}", save_dir.display());
     log::info!("日志文件: {}", log_path.display());
@@ -165,39 +173,42 @@ fn run_app() {
     watcher.borrow().migrate_legacy_files();
 
     // 仅在热键模式下注册全局热键
-    let hotkey_manager: Rc<RefCell<Option<GlobalHotKeyManager>>> = if config.borrow().is_hotkey_mode() {
-        let mgr = match GlobalHotKeyManager::new() {
-            Ok(m) => {
-                log::info!("热键管理器创建成功");
-                m
+    let hotkey_manager: Rc<RefCell<Option<GlobalHotKeyManager>>> =
+        if config.borrow().is_hotkey_mode() {
+            let mgr = match GlobalHotKeyManager::new() {
+                Ok(m) => {
+                    log::info!("热键管理器创建成功");
+                    m
+                }
+                Err(e) => fatal_error(&format!("创建热键管理器失败: {:?}", e)),
+            };
+
+            let hotkey: HotKey = match HotKey::try_from(config.borrow().hotkey.clone()) {
+                Ok(h) => {
+                    log::info!(
+                        "热键 '{}' 解析成功, id={:?}",
+                        config.borrow().hotkey,
+                        h.id()
+                    );
+                    h
+                }
+                Err(e) => fatal_error(&format!(
+                    "解析热键 '{}' 失败: {:?}\n支持格式: Alt+Insert, Ctrl+Shift+V, Super+V",
+                    config.borrow().hotkey,
+                    e
+                )),
+            };
+
+            match mgr.register(hotkey) {
+                Ok(()) => log::info!("热键已注册成功: {}", config.borrow().hotkey),
+                Err(e) => fatal_error(&format!("注册热键失败: {:?}（可能被其他程序占用）", e)),
             }
-            Err(e) => fatal_error(&format!("创建热键管理器失败: {:?}", e)),
+
+            Rc::new(RefCell::new(Some(mgr)))
+        } else {
+            log::info!("热键未配置，使用多格式剪贴板模式");
+            Rc::new(RefCell::new(None))
         };
-
-        let hotkey: HotKey = match HotKey::try_from(config.borrow().hotkey.clone()) {
-            Ok(h) => {
-                log::info!("热键 '{}' 解析成功, id={:?}", config.borrow().hotkey, h.id());
-                h
-            }
-            Err(e) => fatal_error(&format!(
-                "解析热键 '{}' 失败: {:?}\n支持格式: Alt+Insert, Ctrl+Shift+V, Super+V",
-                config.borrow().hotkey, e
-            )),
-        };
-
-        match mgr.register(hotkey) {
-            Ok(()) => log::info!("热键已注册成功: {}", config.borrow().hotkey),
-            Err(e) => fatal_error(&format!(
-                "注册热键失败: {:?}（可能被其他程序占用）",
-                e
-            )),
-        }
-
-        Rc::new(RefCell::new(Some(mgr)))
-    } else {
-        log::info!("热键未配置，使用多格式剪贴板模式");
-        Rc::new(RefCell::new(None))
-    };
 
     // 注册预览热键（独立于输入热键）
     let preview_hotkey: Rc<RefCell<Option<HotKey>>> = Rc::new(RefCell::new(None));
@@ -234,7 +245,14 @@ fn run_app() {
 
     // 开机自启状态
     let autostart_enabled = is_autostart_enabled();
-    log::info!("开机自启: {}", if autostart_enabled { "已启用" } else { "未启用" });
+    log::info!(
+        "开机自启: {}",
+        if autostart_enabled {
+            "已启用"
+        } else {
+            "未启用"
+        }
+    );
 
     // 系统托盘菜单
     let mode_label = if config.borrow().is_hotkey_mode() {
@@ -259,7 +277,8 @@ fn run_app() {
     let reload_config = MenuItem::with_id("reload_config", "重新加载配置", true, None);
     let open_dir = MenuItem::with_id("open_dir", "打开图片目录", true, None);
     let homepage = MenuItem::with_id("homepage", "项目主页", true, None);
-    let autostart_item = CheckMenuItem::with_id("autostart", "开机自启", true, autostart_enabled, None);
+    let autostart_item =
+        CheckMenuItem::with_id("autostart", "开机自启", true, autostart_enabled, None);
     let quit_item = MenuItem::with_id("quit", "退出", true, None);
 
     tray_menu
@@ -354,11 +373,8 @@ fn run_app() {
     };
 
     // 启动配置文件监控线程
-    let _config_watcher = start_config_watcher(
-        main_thread_id,
-        wm_config_changed,
-        config_path.clone(),
-    );
+    let _config_watcher =
+        start_config_watcher(main_thread_id, wm_config_changed, config_path.clone());
 
     log::info!("消息循环启动，等待剪贴板变化通知");
     if config.borrow().is_hotkey_mode() {
@@ -418,7 +434,9 @@ fn run_app() {
                                 let save_dir = watcher.borrow().save_dir.clone();
                                 // CF_UNICODETEXT 用容器路径，CF_HDROP 用源文件路径
                                 let (text_paths, hdrop_paths) = build_file_clipboard_params(
-                                    &files, &saved_names, &config.borrow(),
+                                    &files,
+                                    &saved_names,
+                                    &config.borrow(),
                                 );
                                 // 判断是否有 PNG（用于 CF_DIB）
                                 let first_saved = save_dir.join(&saved_names[0]);
@@ -428,15 +446,23 @@ fn run_app() {
                                     // 单个 PNG 文件：设置完整多格式剪贴板（含 CF_DIB）
                                     // CF_DIB 从源文件读取（与 .clip 副本内容相同），CF_HDROP 指向源文件
                                     log::info!("设置多格式剪贴板 (PNG)...");
-                                    match input::set_multi_format_clipboard(&text_paths, &files[0]) {
-                                        Ok(()) => { last_self_set_time = Some(std::time::Instant::now()); log::info!("多格式剪贴板设置成功"); }
+                                    match input::set_multi_format_clipboard(&text_paths, &files[0])
+                                    {
+                                        Ok(()) => {
+                                            last_self_set_time = Some(std::time::Instant::now());
+                                            log::info!("多格式剪贴板设置成功");
+                                        }
                                         Err(e) => log::error!("多格式剪贴板设置失败: {}", e),
                                     }
                                 } else {
                                     // 多文件或非 PNG：设置文本 + 多文件 CF_HDROP（指向源文件）
                                     log::info!("设置文本+文件剪贴板: {} 个文件", saved_names.len());
-                                    match input::set_multi_file_clipboard(&text_paths, &hdrop_paths) {
-                                        Ok(()) => { last_self_set_time = Some(std::time::Instant::now()); log::info!("文本+文件剪贴板设置成功"); }
+                                    match input::set_multi_file_clipboard(&text_paths, &hdrop_paths)
+                                    {
+                                        Ok(()) => {
+                                            last_self_set_time = Some(std::time::Instant::now());
+                                            log::info!("文本+文件剪贴板设置成功");
+                                        }
                                         Err(e) => log::error!("文本+文件剪贴板设置失败: {}", e),
                                     }
                                 }
@@ -461,12 +487,16 @@ fn run_app() {
                                 let save_dir = watcher.borrow().save_dir.clone();
                                 let win_path = save_dir.join(&saved_name);
                                 if win_path.exists() {
-                                    let container_path = config.borrow().container_path_for(&saved_name);
+                                    let container_path =
+                                        config.borrow().container_path_for(&saved_name);
                                     log::info!("设置多格式剪贴板...");
                                     // 截图路径也追加空行
                                     let text_path = format!("{}\n", container_path);
                                     match input::set_multi_format_clipboard(&text_path, &win_path) {
-                                        Ok(()) => { last_self_set_time = Some(std::time::Instant::now()); log::info!("多格式剪贴板设置成功"); }
+                                        Ok(()) => {
+                                            last_self_set_time = Some(std::time::Instant::now());
+                                            log::info!("多格式剪贴板设置成功");
+                                        }
                                         Err(e) => log::error!("多格式剪贴板设置失败: {}", e),
                                     }
                                 }
@@ -481,7 +511,10 @@ fn run_app() {
         if let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
             log::debug!("收到热键事件: state={:?}", event.state);
             if event.state == HotKeyState::Pressed {
-                let is_preview = preview_hotkey.borrow().as_ref().map_or(false, |k| k.id() == event.id());
+                let is_preview = preview_hotkey
+                    .borrow()
+                    .as_ref()
+                    .map_or(false, |k| k.id() == event.id());
                 let is_input = config.borrow().is_hotkey_mode();
 
                 if is_preview {
@@ -489,7 +522,10 @@ fn run_app() {
                     log::info!("预览热键触发");
                     if let Some((disk_path, _name)) = watcher.borrow().find_latest_clip() {
                         if is_executable_file(&disk_path, &config.borrow().blocked_preview_ext) {
-                            log::warn!("预览已拦截：可执行文件不允许通过预览打开 ({})", disk_path.display());
+                            log::warn!(
+                                "预览已拦截：可执行文件不允许通过预览打开 ({})",
+                                disk_path.display()
+                            );
                         } else {
                             let _ = std::process::Command::new("cmd")
                                 .args(["/c", "start", "", &disk_path.to_string_lossy()])
@@ -524,7 +560,7 @@ fn run_app() {
                     let _ = std::process::Command::new("notepad").arg(&log_path).spawn();
                 }
                 "open_config" => {
-                    let _ = std::process::Command::new("explorer").arg(&config_path).spawn();
+                    let _ = desktop_fs::open_path(&config_path);
                 }
                 "reload_config" => {
                     do_reload_config(
@@ -541,7 +577,7 @@ fn run_app() {
                 }
                 "open_dir" => {
                     let dir = config.borrow().resolved_save_dir(&exe_dir);
-                    let _ = std::process::Command::new("explorer").arg(dir).spawn();
+                    let _ = desktop_fs::open_path(&dir);
                 }
                 "homepage" => {
                     let _ = std::process::Command::new("cmd")
@@ -552,11 +588,20 @@ fn run_app() {
                     toggle_autostart();
                     let now_enabled = is_autostart_enabled();
                     autostart_item.set_checked(now_enabled);
-                    log::info!("开机自启: {}", if now_enabled { "已启用" } else { "已禁用" });
+                    log::info!(
+                        "开机自启: {}",
+                        if now_enabled {
+                            "已启用"
+                        } else {
+                            "已禁用"
+                        }
+                    );
                 }
                 "quit" => {
                     log::info!("用户选择退出");
-                    unsafe { PostQuitMessage(0); }
+                    unsafe {
+                        PostQuitMessage(0);
+                    }
                 }
                 _ => {}
             }
@@ -579,10 +624,8 @@ fn run_app() {
 }
 
 fn get_exe_dir() -> std::path::PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+    desktop_config::current_exe_dir()
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
 }
 
 /// 显示启动提示弹窗（MessageBoxW，零额外依赖）
@@ -653,8 +696,8 @@ fn do_reload_config(
     let old_hotkey_mode = config.borrow().is_hotkey_mode();
     let old_hotkey = config.borrow().hotkey.clone();
     let old_preview_hotkey = config.borrow().preview_hotkey.clone();
-    let hotkey_changed = old_hotkey_mode != new_config.is_hotkey_mode()
-        || old_hotkey != new_config.hotkey;
+    let hotkey_changed =
+        old_hotkey_mode != new_config.is_hotkey_mode() || old_hotkey != new_config.hotkey;
     let preview_changed = old_preview_hotkey != new_config.preview_hotkey;
 
     // 更新配置
@@ -666,14 +709,17 @@ fn do_reload_config(
         w.config = new_config.clone();
         let new_save_dir = new_config.resolved_save_dir(exe_dir);
         if w.save_dir != new_save_dir {
-            log::info!("save_dir 变更: {} → {}", w.save_dir.display(), new_save_dir.display());
+            log::info!(
+                "save_dir 变更: {} → {}",
+                w.save_dir.display(),
+                new_save_dir.display()
+            );
             w.save_dir = new_save_dir;
         }
     }
 
     // 确保热键管理器存在（如果需要注册任何热键）
-    let need_manager = new_config.is_hotkey_mode()
-        || !new_config.preview_hotkey.trim().is_empty();
+    let need_manager = new_config.is_hotkey_mode() || !new_config.preview_hotkey.trim().is_empty();
     if need_manager && hotkey_manager.borrow().is_none() {
         match global_hotkey::GlobalHotKeyManager::new() {
             Ok(mgr) => *hotkey_manager.borrow_mut() = Some(mgr),
@@ -760,8 +806,7 @@ fn do_reload_config(
     }
 
     // 如果没有任何热键需要，释放管理器
-    let has_any_hotkey = new_config.is_hotkey_mode()
-        || preview_hotkey_cell.borrow().is_some();
+    let has_any_hotkey = new_config.is_hotkey_mode() || preview_hotkey_cell.borrow().is_some();
     if !has_any_hotkey {
         *hotkey_manager.borrow_mut() = None;
         log::info!("无热键需要，热键管理器已释放");
@@ -786,7 +831,10 @@ fn do_reload_config(
     };
     preview_item.set_text(&preview_label);
 
-    log::info!("配置已重新加载完成 (save_dir: {})", new_config.resolved_save_dir(exe_dir).display());
+    log::info!(
+        "配置已重新加载完成 (save_dir: {})",
+        new_config.resolved_save_dir(exe_dir).display()
+    );
 }
 
 // ============================================================
@@ -802,13 +850,17 @@ struct ConfigWatcher {
 #[cfg(target_os = "windows")]
 impl Drop for ConfigWatcher {
     fn drop(&mut self) {
-        use windows_sys::Win32::System::Threading::SetEvent;
         use windows_sys::Win32::Foundation::CloseHandle;
-        unsafe { SetEvent(self.exit_event); }
+        use windows_sys::Win32::System::Threading::SetEvent;
+        unsafe {
+            SetEvent(self.exit_event);
+        }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
-        unsafe { CloseHandle(self.exit_event); }
+        unsafe {
+            CloseHandle(self.exit_event);
+        }
     }
 }
 
@@ -820,20 +872,18 @@ fn start_config_watcher(
 ) -> ConfigWatcher {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
+    };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED, FILE_LIST_DIRECTORY,
         FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
-    use windows_sys::Win32::System::Threading::{
-        CreateEventW, WaitForMultipleObjects,
-    };
+    use windows_sys::Win32::System::Threading::{CreateEventW, WaitForMultipleObjects};
     use windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
 
     // 创建退出事件（手动重置，初始无信号）
-    let exit_event: HANDLE = unsafe {
-        CreateEventW(std::ptr::null_mut(), 1, 0, std::ptr::null())
-    };
+    let exit_event: HANDLE = unsafe { CreateEventW(std::ptr::null_mut(), 1, 0, std::ptr::null()) };
     if exit_event.is_null() {
         log::error!("CreateEventW (exit) 失败");
     }
@@ -1020,7 +1070,10 @@ fn is_autostart_enabled() -> bool {
     };
 
     let key = r"Software\Microsoft\Windows\CurrentVersion\Run";
-    let value_name: Vec<u16> = OsStr::new("clipImg").encode_wide().chain(std::iter::once(0)).collect();
+    let value_name: Vec<u16> = OsStr::new("clipImg")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
 
     let mut buf = [0u16; 512];
     let mut buf_len = (buf.len() * 2) as u32;
@@ -1028,7 +1081,11 @@ fn is_autostart_enabled() -> bool {
     let result = unsafe {
         windows_sys::Win32::System::Registry::RegGetValueW(
             0x80000001 as *mut std::ffi::c_void, // HKCU
-            OsStr::new(key).encode_wide().chain(std::iter::once(0)).collect::<Vec<u16>>().as_ptr(),
+            OsStr::new(key)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect::<Vec<u16>>()
+                .as_ptr(),
             value_name.as_ptr(),
             0x00020002, // RRF_RT_REG_SZ
             std::ptr::null_mut(),
@@ -1067,14 +1124,25 @@ fn set_autostart() {
 
     let exe_path = match std::env::current_exe() {
         Ok(p) => p,
-        Err(e) => { log::error!("获取 EXE 路径失败: {}", e); return; }
+        Err(e) => {
+            log::error!("获取 EXE 路径失败: {}", e);
+            return;
+        }
     };
 
     let value: String = format!("\"{}\"", exe_path.display());
-    let value_wide: Vec<u16> = OsStr::new(&value).encode_wide().chain(std::iter::once(0)).collect();
+    let value_wide: Vec<u16> = OsStr::new(&value)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     let key_wide: Vec<u16> = OsStr::new(r"Software\Microsoft\Windows\CurrentVersion\Run")
-        .encode_wide().chain(std::iter::once(0)).collect();
-    let name_wide: Vec<u16> = OsStr::new("clipImg").encode_wide().chain(std::iter::once(0)).collect();
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let name_wide: Vec<u16> = OsStr::new("clipImg")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
 
     let result = unsafe {
         windows_sys::Win32::System::Registry::RegSetKeyValueW(
@@ -1100,8 +1168,13 @@ fn remove_autostart() {
     use std::os::windows::ffi::OsStrExt;
 
     let key_wide: Vec<u16> = OsStr::new(r"Software\Microsoft\Windows\CurrentVersion\Run")
-        .encode_wide().chain(std::iter::once(0)).collect();
-    let name_wide: Vec<u16> = OsStr::new("clipImg").encode_wide().chain(std::iter::once(0)).collect();
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let name_wide: Vec<u16> = OsStr::new("clipImg")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
 
     let result = unsafe {
         windows_sys::Win32::System::Registry::RegDeleteKeyValueW(
@@ -1142,9 +1215,8 @@ fn build_file_clipboard_params(
 #[cfg(target_os = "windows")]
 fn is_executable_file(path: &std::path::Path, user_blocked: &[String]) -> bool {
     const BLOCKED_EXTENSIONS: &[&str] = &[
-        "exe", "bat", "cmd", "ps1", "vbs", "vbe", "js", "jse", "wsf", "wsh",
-        "msi", "scr", "com", "pif", "cpl",
-        "sh", "bash", "py", "pyw", "rb", "pl", "php",
+        "exe", "bat", "cmd", "ps1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "msi", "scr", "com",
+        "pif", "cpl", "sh", "bash", "py", "pyw", "rb", "pl", "php",
     ];
     let ext = match path.extension().and_then(|e| e.to_str()) {
         Some(e) => e.to_lowercase(),

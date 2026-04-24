@@ -6,7 +6,7 @@
 
 <p align="center">WSL2 / Docker 剪贴板图片工具</p>
 
-> 当前版本：**v1.0.9**
+> 当前版本：**v1.0.10**
 
 在 Windows 截取图片后（目前自测PrintScreen键系统级截屏、QQ快捷键截屏、微信快捷键截屏均有效），在 WSL2 终端（Claude Code CLI、Codex CLI 等）里粘贴即可让多模态模型“看到”图片。
 
@@ -24,6 +24,7 @@
 - **UNC 路径**：`save_dir` 支持 `\\wsl$\...` 等 UNC 格式，WSL 未启动时容错提示
 - **历史清理**：自动清理超过指定小时数的旧文件（基于文件名时间戳判断）
 - **单 EXE**：无运行时依赖，约 1MB，双击即用（无控制台黑框）
+- **共享基础设施**：日志、配置、i18n、文件系统辅助能力已沉淀到 [DeskFoundry](https://github.com/Shawlaw/DeskFoundry)
 
 ---
 
@@ -142,8 +143,7 @@ clipimg-app/
 │   ├── clipboard.rs        # 剪贴板图片保存 + 文件复制 + MD5 去重 + 历史清理
 │   ├── clipboard_listener.rs # 剪贴板变化监听（Win32 事件驱动，替代轮询）
 │   ├── input.rs            # 路径输入：热键模式（SendInput + IME 切换）+ 剪贴板模式（多格式设置）
-│   ├── first_run.rs        # 首次运行路径确认对话框（Win32 内存对话框）
-│   └── logger.rs           # 文件 + 控制台双写日志 + panic handler
+│   └── first_run.rs        # 首次运行路径确认对话框（Win32 内存对话框）
 ├── assets/                 # UI 资源源文件（不打包进程序，用于后续调整）
 │   ├── icon_source.png     # 应用图标设计稿（1024x1024），所有尺寸从此图生成
 │   └── icon_raw.png        # 图标草稿/备用版本
@@ -151,7 +151,7 @@ clipimg-app/
 ├── examples/
 │   ├── gen_icon.rs         # 程序生成简约图标
 │   └── convert_icon.rs     # 从设计稿生成各尺寸图标
-├── Cargo.toml
+├── Cargo.toml              # 依赖 DeskFoundry 共享 SDK
 ├── build.rs                # Windows 资源编译（EXE 图标 + 版本信息）
 └── config.example.json
 ```

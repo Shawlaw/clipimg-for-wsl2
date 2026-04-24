@@ -1,17 +1,17 @@
 /// Simple icon generator for clipImg
 /// Run: cargo run --example gen_icon
-use image::{Rgba, RgbaImage, ImageFormat};
+use image::{ImageFormat, Rgba, RgbaImage};
 use std::path::Path;
 
 fn main() {
     let size = 256u32;
     let mut img = RgbaImage::new(size, size);
 
-    let bg = Rgba([58, 142, 204, 255]);       // Blue
+    let bg = Rgba([58, 142, 204, 255]); // Blue
     let white = Rgba([255, 255, 255, 255]);
     let dark_bg = Rgba([40, 105, 165, 255]);
-    let accent = Rgba([255, 200, 60, 255]);   // Sun yellow
-    let green = Rgba([80, 180, 80, 255]);     // Mountain green
+    let accent = Rgba([255, 200, 60, 255]); // Sun yellow
+    let green = Rgba([80, 180, 80, 255]); // Mountain green
 
     // Draw rounded rectangle background
     let margin = 16u32;
@@ -70,16 +70,49 @@ fn main() {
     // Left mountain
     let peak_x1 = inner_x + inner_w / 3;
     let peak_y1 = inner_y + 20i32 as u32;
-    draw_triangle(&mut img, peak_x1, peak_y1, inner_x + 10, base_y, inner_x + inner_w / 2 - 5, base_y, dark_bg, inner_x, inner_y, inner_w, inner_h);
+    draw_triangle(
+        &mut img,
+        peak_x1,
+        peak_y1,
+        inner_x + 10,
+        base_y,
+        inner_x + inner_w / 2 - 5,
+        base_y,
+        dark_bg,
+        inner_x,
+        inner_y,
+        inner_w,
+        inner_h,
+    );
 
     // Right mountain (taller)
     let peak_x2 = inner_x + inner_w * 2 / 3;
     let peak_y2 = inner_y + 10;
-    draw_triangle(&mut img, peak_x2, peak_y2, inner_x + inner_w / 3, base_y, inner_x + inner_w - 10, base_y, green, inner_x, inner_y, inner_w, inner_h);
+    draw_triangle(
+        &mut img,
+        peak_x2,
+        peak_y2,
+        inner_x + inner_w / 3,
+        base_y,
+        inner_x + inner_w - 10,
+        base_y,
+        green,
+        inner_x,
+        inner_y,
+        inner_w,
+        inner_h,
+    );
 
     // Ground
     let ground = Rgba([100, 160, 80, 255]);
-    fill_rect(&mut img, inner_x, base_y, inner_w, inner_h - (base_y - inner_y), ground);
+    fill_rect(
+        &mut img,
+        inner_x,
+        base_y,
+        inner_w,
+        inner_h - (base_y - inner_y),
+        ground,
+    );
 
     // Generate multiple sizes for ICO: 16, 32, 48, 256
     let out_dir = std::env::current_dir().unwrap().join("icons");
@@ -106,8 +139,20 @@ fn main() {
 }
 
 fn in_rounded_rect(x: u32, y: u32, min: u32, max: u32, r: u32) -> bool {
-    let dx = if x < min + r { min + r - x } else if x > max - r { x - (max - r) } else { return true; };
-    let dy = if y < min + r { min + r - y } else if y > max - r { y - (max - r) } else { return true; };
+    let dx = if x < min + r {
+        min + r - x
+    } else if x > max - r {
+        x - (max - r)
+    } else {
+        return true;
+    };
+    let dy = if y < min + r {
+        min + r - y
+    } else if y > max - r {
+        y - (max - r)
+    } else {
+        return true;
+    };
     dx * dx + dy * dy <= r * r
 }
 
@@ -123,11 +168,17 @@ fn fill_rect(img: &mut RgbaImage, x: u32, y: u32, w: u32, h: u32, color: Rgba<u8
 
 fn draw_triangle(
     img: &mut RgbaImage,
-    px: u32, py: u32,      // peak
-    lx: u32, ly: u32,      // left base
-    rx: u32, ry: u32,      // right base
+    px: u32,
+    py: u32, // peak
+    lx: u32,
+    ly: u32, // left base
+    rx: u32,
+    ry: u32, // right base
     color: Rgba<u8>,
-    clip_x: u32, clip_y: u32, clip_w: u32, clip_h: u32,
+    clip_x: u32,
+    clip_y: u32,
+    clip_w: u32,
+    clip_h: u32,
 ) {
     let min_y = py.min(ly).min(ry);
     let max_y = py.max(ly).max(ry);
@@ -151,7 +202,15 @@ fn draw_triangle(
     }
 }
 
-fn scanline_triangle(y: u32, x0: u32, y0: u32, x1: u32, y1: u32, x2: u32, y2: u32) -> Option<(u32, u32)> {
+fn scanline_triangle(
+    y: u32,
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+    x2: u32,
+    y2: u32,
+) -> Option<(u32, u32)> {
     let mut xs = Vec::new();
     for &(ax, ay, bx, by) in &[(x0, y0, x1, y1), (x1, y1, x2, y2), (x2, y2, x0, y0)] {
         if (ay <= y && by > y) || (by <= y && ay > y) {

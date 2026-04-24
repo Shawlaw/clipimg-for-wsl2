@@ -6,21 +6,21 @@
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Foundation::{HGLOBAL, HWND};
 #[cfg(target_os = "windows")]
+use windows_sys::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+#[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyboardLayout, LoadKeyboardLayoutW, SendInput, ACTIVATE_KEYBOARD_LAYOUT_FLAGS, HKL,
-    INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
+    GetKeyboardLayout, LoadKeyboardLayoutW, SendInput, ACTIVATE_KEYBOARD_LAYOUT_FLAGS, HKL, INPUT,
+    INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowThreadProcessId, PostMessageW, HWND_BROADCAST,
     WM_INPUTLANGCHANGEREQUEST,
 };
-#[cfg(target_os = "windows")]
-use windows_sys::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
-};
-#[cfg(target_os = "windows")]
-use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 
 // 剪贴板格式常量
 #[cfg(target_os = "windows")]
@@ -130,8 +130,7 @@ fn send_unicode_char(ch: char) -> Result<(), String> {
     };
 
     // 关键：分开调用 SendInput，修复批量发送 bug
-    let sent_down =
-        unsafe { SendInput(1, &key_down as *const INPUT, size_of::<INPUT>() as i32) };
+    let sent_down = unsafe { SendInput(1, &key_down as *const INPUT, size_of::<INPUT>() as i32) };
     if sent_down == 0 {
         return Err(format!(
             "SendInput key-down 失败 (char='{}'): {}",
@@ -140,8 +139,7 @@ fn send_unicode_char(ch: char) -> Result<(), String> {
         ));
     }
 
-    let sent_up =
-        unsafe { SendInput(1, &key_up as *const INPUT, size_of::<INPUT>() as i32) };
+    let sent_up = unsafe { SendInput(1, &key_up as *const INPUT, size_of::<INPUT>() as i32) };
     if sent_up == 0 {
         return Err(format!(
             "SendInput key-up 失败 (char='{}'): {}",
@@ -175,19 +173,24 @@ pub fn set_multi_format_clipboard(
     );
 
     // 读取 PNG 数据
-    let png_data = std::fs::read(win_image_path)
-        .map_err(|e| format!("读取图片失败: {}", e))?;
+    let png_data = std::fs::read(win_image_path).map_err(|e| format!("读取图片失败: {}", e))?;
 
     // 将 PNG 转换为 BMP/DIB 格式
     let dib_data = png_to_dib(&png_data)?;
 
     // Windows 文件路径（用于 CF_HDROP）
     let win_path_str = win_image_path.to_str().unwrap_or("");
-    let win_path_wide: Vec<u16> = win_path_str.encode_utf16().chain(std::iter::once(0)).collect();
+    let win_path_wide: Vec<u16> = win_path_str
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
 
     unsafe {
         if OpenClipboard(std::ptr::null_mut()) == 0 {
-            return Err(format!("OpenClipboard 失败: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "OpenClipboard 失败: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         if EmptyClipboard() == 0 {
@@ -211,7 +214,10 @@ pub fn set_multi_format_clipboard(
                 std::ptr::copy_nonoverlapping(text_bytes.as_ptr(), ptr, text_bytes.len());
                 GlobalUnlock(text_handle);
                 if SetClipboardData(CF_UNICODETEXT, text_handle).is_null() {
-                    log::warn!("SetClipboardData CF_UNICODETEXT 失败: {}", std::io::Error::last_os_error());
+                    log::warn!(
+                        "SetClipboardData CF_UNICODETEXT 失败: {}",
+                        std::io::Error::last_os_error()
+                    );
                 } else {
                     text_ok = true;
                 }
@@ -231,7 +237,10 @@ pub fn set_multi_format_clipboard(
                 std::ptr::copy_nonoverlapping(dib_data.as_ptr(), ptr, dib_data.len());
                 GlobalUnlock(dib_handle);
                 if SetClipboardData(CF_DIB, dib_handle).is_null() {
-                    log::warn!("SetClipboardData CF_DIB 失败: {}", std::io::Error::last_os_error());
+                    log::warn!(
+                        "SetClipboardData CF_DIB 失败: {}",
+                        std::io::Error::last_os_error()
+                    );
                 }
             } else {
                 log::warn!("GlobalLock CF_DIB 失败");
@@ -254,11 +263,18 @@ pub fn set_multi_format_clipboard(
                 };
                 std::ptr::write(ptr as *mut DROPFILES, df);
                 let path_ptr = ptr.add(std::mem::size_of::<DROPFILES>()) as *mut u16;
-                std::ptr::copy_nonoverlapping(win_path_wide.as_ptr(), path_ptr, win_path_wide.len());
+                std::ptr::copy_nonoverlapping(
+                    win_path_wide.as_ptr(),
+                    path_ptr,
+                    win_path_wide.len(),
+                );
                 *path_ptr.add(win_path_wide.len()) = 0;
                 GlobalUnlock(drop_handle);
                 if SetClipboardData(CF_HDROP, drop_handle).is_null() {
-                    log::warn!("SetClipboardData CF_HDROP 失败: {}", std::io::Error::last_os_error());
+                    log::warn!(
+                        "SetClipboardData CF_HDROP 失败: {}",
+                        std::io::Error::last_os_error()
+                    );
                 }
             } else {
                 log::warn!("GlobalLock CF_HDROP 失败");
@@ -296,8 +312,7 @@ struct DROPFILES {
 /// 将 PNG 数据转换为 DIB（Device Independent Bitmap）格式
 #[cfg(target_os = "windows")]
 fn png_to_dib(png_data: &[u8]) -> Result<Vec<u8>, String> {
-    let img = image::load_from_memory(png_data)
-        .map_err(|e| format!("解析 PNG 失败: {}", e))?;
+    let img = image::load_from_memory(png_data).map_err(|e| format!("解析 PNG 失败: {}", e))?;
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
 
@@ -359,16 +374,24 @@ pub fn set_multi_format_clipboard(
 /// 仅设置 CF_UNICODETEXT 到剪贴板（非图片文件场景）
 #[cfg(target_os = "windows")]
 pub fn set_text_clipboard(text: &str) -> Result<(), String> {
-    use windows_sys::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
 
     unsafe {
         if OpenClipboard(std::ptr::null_mut()) == 0 {
-            return Err(format!("OpenClipboard 失败: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "OpenClipboard 失败: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         if EmptyClipboard() == 0 {
             CloseClipboard();
-            return Err(format!("EmptyClipboard 失败: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "EmptyClipboard 失败: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         let text_bytes: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
@@ -411,16 +434,25 @@ pub fn set_text_and_file_clipboard(
     );
 
     let win_path_str = win_file_path.to_str().unwrap_or("");
-    let win_path_wide: Vec<u16> = win_path_str.encode_utf16().chain(std::iter::once(0)).collect();
+    let win_path_wide: Vec<u16> = win_path_str
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
 
     unsafe {
         if OpenClipboard(std::ptr::null_mut()) == 0 {
-            return Err(format!("OpenClipboard 失败: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "OpenClipboard 失败: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         if EmptyClipboard() == 0 {
             CloseClipboard();
-            return Err(format!("EmptyClipboard 失败: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "EmptyClipboard 失败: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         let null_handle: HGLOBAL = std::ptr::null_mut();
@@ -436,7 +468,10 @@ pub fn set_text_and_file_clipboard(
                 std::ptr::copy_nonoverlapping(text_bytes.as_ptr(), ptr, text_bytes.len());
                 GlobalUnlock(text_handle);
                 if SetClipboardData(CF_UNICODETEXT, text_handle).is_null() {
-                    log::warn!("SetClipboardData CF_UNICODETEXT 失败: {}", std::io::Error::last_os_error());
+                    log::warn!(
+                        "SetClipboardData CF_UNICODETEXT 失败: {}",
+                        std::io::Error::last_os_error()
+                    );
                 } else {
                     text_ok = true;
                 }
@@ -461,11 +496,18 @@ pub fn set_text_and_file_clipboard(
                 };
                 std::ptr::write(ptr as *mut DROPFILES, df);
                 let path_ptr = ptr.add(std::mem::size_of::<DROPFILES>()) as *mut u16;
-                std::ptr::copy_nonoverlapping(win_path_wide.as_ptr(), path_ptr, win_path_wide.len());
+                std::ptr::copy_nonoverlapping(
+                    win_path_wide.as_ptr(),
+                    path_ptr,
+                    win_path_wide.len(),
+                );
                 *path_ptr.add(win_path_wide.len()) = 0;
                 GlobalUnlock(drop_handle);
                 if SetClipboardData(CF_HDROP, drop_handle).is_null() {
-                    log::warn!("SetClipboardData CF_HDROP 失败: {}", std::io::Error::last_os_error());
+                    log::warn!(
+                        "SetClipboardData CF_HDROP 失败: {}",
+                        std::io::Error::last_os_error()
+                    );
                 }
             } else {
                 log::warn!("GlobalLock CF_HDROP 失败");
@@ -502,26 +544,40 @@ pub fn set_multi_file_clipboard(
     // 构建多文件 CF_HDROP 数据：每个路径 null 终止，最后额外一个 null
     let mut paths_data: Vec<u16> = Vec::new();
     for path in win_file_paths {
-        let wide: Vec<u16> = path.to_str().unwrap_or("").encode_utf16().chain(std::iter::once(0)).collect();
+        let wide: Vec<u16> = path
+            .to_str()
+            .unwrap_or("")
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
         paths_data.extend_from_slice(&wide);
     }
     paths_data.push(0); // 双 null 终止
 
     unsafe {
         if OpenClipboard(std::ptr::null_mut()) == 0 {
-            return Err(format!("OpenClipboard 失败: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "OpenClipboard 失败: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         if EmptyClipboard() == 0 {
             CloseClipboard();
-            return Err(format!("EmptyClipboard 失败: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "EmptyClipboard 失败: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         let null_handle: HGLOBAL = std::ptr::null_mut();
         let mut text_ok = false;
 
         // 1. CF_UNICODETEXT（容器侧多行路径）— 关键格式
-        let text_bytes: Vec<u16> = text_paths.encode_utf16().chain(std::iter::once(0)).collect();
+        let text_bytes: Vec<u16> = text_paths
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
         let text_size = text_bytes.len() * 2;
         let text_handle: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, text_size);
         if text_handle != null_handle {
@@ -530,7 +586,10 @@ pub fn set_multi_file_clipboard(
                 std::ptr::copy_nonoverlapping(text_bytes.as_ptr(), ptr, text_bytes.len());
                 GlobalUnlock(text_handle);
                 if SetClipboardData(CF_UNICODETEXT, text_handle).is_null() {
-                    log::warn!("SetClipboardData CF_UNICODETEXT 失败: {}", std::io::Error::last_os_error());
+                    log::warn!(
+                        "SetClipboardData CF_UNICODETEXT 失败: {}",
+                        std::io::Error::last_os_error()
+                    );
                 } else {
                     text_ok = true;
                 }
@@ -558,7 +617,10 @@ pub fn set_multi_file_clipboard(
                 std::ptr::copy_nonoverlapping(paths_data.as_ptr(), path_ptr, paths_data.len());
                 GlobalUnlock(drop_handle);
                 if SetClipboardData(CF_HDROP, drop_handle).is_null() {
-                    log::warn!("SetClipboardData CF_HDROP 失败: {}", std::io::Error::last_os_error());
+                    log::warn!(
+                        "SetClipboardData CF_HDROP 失败: {}",
+                        std::io::Error::last_os_error()
+                    );
                 }
             } else {
                 log::warn!("GlobalLock CF_HDROP 失败");
@@ -624,7 +686,8 @@ mod tests {
     #[test]
     #[cfg(not(target_os = "windows"))]
     fn test_multi_format_clipboard_non_windows() {
-        let result = set_multi_format_clipboard("/test/path.png", std::path::Path::new("C:\\test.png"));
+        let result =
+            set_multi_format_clipboard("/test/path.png", std::path::Path::new("C:\\test.png"));
         assert!(result.is_err());
     }
 }

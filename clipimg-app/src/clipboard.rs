@@ -1,5 +1,5 @@
 use crate::config::AppConfig;
-use crate::logger::filename_timestamp;
+use desktop_logger::filename_timestamp;
 use image::ImageFormat;
 use md5::{Digest, Md5};
 use std::fs;
@@ -127,9 +127,8 @@ impl ClipboardWatcher {
 
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            let should_migrate = name == "latest.png"
-                || name == "latest_file"
-                || name.starts_with("latest_file.");
+            let should_migrate =
+                name == "latest.png" || name == "latest_file" || name.starts_with("latest_file.");
 
             if !should_migrate {
                 continue;
@@ -145,18 +144,12 @@ impl ClipboardWatcher {
             };
 
             // 用 mtime 生成文件名
-            let timestamp = match fs::metadata(&path)
-                .ok()
-                .and_then(|m| m.modified().ok())
-            {
+            let timestamp = match fs::metadata(&path).ok().and_then(|m| m.modified().ok()) {
                 Some(mtime) => {
                     let dur = mtime
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default();
-                    format_timestamp_from_secs_millis(
-                        dur.as_secs(),
-                        dur.subsec_millis(),
-                    )
+                    format_timestamp_from_secs_millis(dur.as_secs(), dur.subsec_millis())
                 }
                 None => filename_timestamp(),
             };
@@ -232,7 +225,8 @@ impl ClipboardWatcher {
         }
 
         let file_name = src_path.file_name()?.to_str()?;
-        let extension = src_path.extension()
+        let extension = src_path
+            .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_string();
@@ -249,7 +243,9 @@ impl ClipboardWatcher {
         if size_mb > self.config.max_copy_size_mb as f64 {
             log::warn!(
                 "文件过大，跳过: {} ({:.1}MB > {}MB)",
-                file_name, size_mb, self.config.max_copy_size_mb
+                file_name,
+                size_mb,
+                self.config.max_copy_size_mb
             );
             return None;
         }
@@ -284,7 +280,9 @@ impl ClipboardWatcher {
                 let skipped = src_paths.len() - max;
                 log::warn!(
                     "文件数超出上限 ({}/{})，已跳过 {} 个文件",
-                    max, src_paths.len(), skipped
+                    max,
+                    src_paths.len(),
+                    skipped
                 );
                 break;
             }
@@ -368,12 +366,8 @@ impl ClipboardWatcher {
         rgba: &[u8],
         path: &Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let img = image::RgbaImage::from_raw(
-            width as u32,
-            height as u32,
-            rgba.to_vec(),
-        )
-        .ok_or("无法创建图片缓冲区")?;
+        let img = image::RgbaImage::from_raw(width as u32, height as u32, rgba.to_vec())
+            .ok_or("无法创建图片缓冲区")?;
 
         img.save_with_format(path, ImageFormat::Png)?;
         Ok(())
@@ -388,8 +382,8 @@ impl ClipboardWatcher {
         }
         let mut deleted = 0;
 
-        let cutoff = std::time::SystemTime::now()
-            - std::time::Duration::from_secs(max_hours as u64 * 3600);
+        let cutoff =
+            std::time::SystemTime::now() - std::time::Duration::from_secs(max_hours as u64 * 3600);
 
         let entries = match fs::read_dir(&self.save_dir) {
             Ok(e) => e,
@@ -475,10 +469,18 @@ fn date_to_days(y: u32, m: u32, d: u32) -> u32 {
     // 使用更简单的方法
     let mut total_days = 0u64;
     for yr in 1..y {
-        total_days += if yr % 4 == 0 && (yr % 100 != 0 || yr % 400 == 0) { 366 } else { 365 };
+        total_days += if yr % 4 == 0 && (yr % 100 != 0 || yr % 400 == 0) {
+            366
+        } else {
+            365
+        };
     }
     let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-    let md: &[u64] = if leap { &[31,29,31,30,31,30,31,31,30,31,30,31] } else { &[31,28,31,30,31,30,31,31,30,31,30,31] };
+    let md: &[u64] = if leap {
+        &[31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        &[31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
     for i in 0..(m as usize).saturating_sub(1) {
         total_days += md[i];
     }
@@ -502,7 +504,9 @@ fn format_timestamp_from_secs_millis(secs: u64, millis: u32) -> String {
     let (y, mo, d) = days_to_ymd(days as i64);
     format!(
         "{:04}{:02}{:02}_{:02}{:02}{:02}{:03}",
-        y, mo, d,
+        y,
+        mo,
+        d,
         (tod / 3600) as u32,
         ((tod % 3600) / 60) as u32,
         (tod % 60) as u32,
@@ -514,26 +518,43 @@ fn format_timestamp_from_secs_millis(secs: u64, millis: u32) -> String {
 pub fn days_to_ymd(mut days: i64) -> (u32, u32, u32) {
     let mut y = 1970i64;
     loop {
-        let dy = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
-        if days < dy { break; }
+        let dy = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
+            366
+        } else {
+            365
+        };
+        if days < dy {
+            break;
+        }
         days -= dy;
         y += 1;
     }
     let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-    let md: &[u32] = if leap { &[31,29,31,30,31,30,31,31,30,31,30,31] } else { &[31,28,31,30,31,30,31,31,30,31,30,31] };
+    let md: &[u32] = if leap {
+        &[31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        &[31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
     let mut m = 0u32;
     for (i, &d) in md.iter().enumerate() {
-        if days < d as i64 { m = i as u32 + 1; break; }
+        if days < d as i64 {
+            m = i as u32 + 1;
+            break;
+        }
         days -= d as i64;
     }
-    if m == 0 { m = 12; }
+    if m == 0 {
+        m = 12;
+    }
     (y as u32, m, days as u32 + 1)
 }
 
 /// 从剪贴板读取 CF_HDROP 文件路径列表（仅 Windows）
 #[cfg(target_os = "windows")]
 pub fn read_clipboard_files() -> Option<Vec<std::path::PathBuf>> {
-    use windows_sys::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, GetClipboardData, OpenClipboard,
+    };
     use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 
     const CF_HDROP: u32 = 15;
@@ -583,7 +604,11 @@ pub fn read_clipboard_files() -> Option<Vec<std::path::PathBuf>> {
         GlobalUnlock(handle);
         CloseClipboard();
 
-        if files.is_empty() { None } else { Some(files) }
+        if files.is_empty() {
+            None
+        } else {
+            Some(files)
+        }
     }
 }
 
@@ -592,8 +617,8 @@ pub fn read_clipboard_files() -> Option<Vec<std::path::PathBuf>> {
 #[cfg(target_os = "windows")]
 fn show_unavailable_dialog(msg: &str) -> isize {
     use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
     use std::iter::once;
+    use std::os::windows::ffi::OsStrExt;
 
     const WS_POPUP: u32 = 0x80000000;
     const WS_VISIBLE: u32 = 0x10000000;
@@ -618,24 +643,40 @@ fn show_unavailable_dialog(msg: &str) -> isize {
     }
 
     impl BytesExt for Vec<u8> {
-        fn push_u32(&mut self, v: u32) { self.extend_from_slice(&v.to_ne_bytes()); }
-        fn push_u16(&mut self, v: u16) { self.extend_from_slice(&v.to_ne_bytes()); }
-        fn push_i16(&mut self, v: i16) { self.extend_from_slice(&v.to_ne_bytes()); }
+        fn push_u32(&mut self, v: u32) {
+            self.extend_from_slice(&v.to_ne_bytes());
+        }
+        fn push_u16(&mut self, v: u16) {
+            self.extend_from_slice(&v.to_ne_bytes());
+        }
+        fn push_i16(&mut self, v: i16) {
+            self.extend_from_slice(&v.to_ne_bytes());
+        }
         fn push_str16(&mut self, s: &str) {
             let w: Vec<u16> = OsStr::new(s).encode_wide().chain(once(0u16)).collect();
-            for &c in &w { self.push_u16(c); }
+            for &c in &w {
+                self.push_u16(c);
+            }
         }
-        fn align4(&mut self) { while self.len() % 4 != 0 { self.push(0); } }
+        fn align4(&mut self) {
+            while self.len() % 4 != 0 {
+                self.push(0);
+            }
+        }
     }
 
     let mut b = Vec::new();
 
     // DLGTEMPLATE
-    b.push_u32(WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME | DS_CENTER | DS_SETFONT);
+    b.push_u32(
+        WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME | DS_CENTER | DS_SETFONT,
+    );
     b.push_u32(0);
     b.push_u16(4); // cdit = 4 controls
-    b.push_i16(0); b.push_i16(0);
-    b.push_i16(300); b.push_i16(110);
+    b.push_i16(0);
+    b.push_i16(0);
+    b.push_i16(300);
+    b.push_i16(110);
     b.push_u16(0); // menu
     b.push_u16(0); // class
     b.push_str16("clipImg");
@@ -646,19 +687,28 @@ fn show_unavailable_dialog(msg: &str) -> isize {
     b.align4();
     b.push_u32(WS_CHILD | WS_VISIBLE | SS_ICON);
     b.push_u32(0);
-    b.push_i16(10); b.push_i16(12); b.push_i16(32); b.push_i16(32);
+    b.push_i16(10);
+    b.push_i16(12);
+    b.push_i16(32);
+    b.push_i16(32);
     b.push_u16(0);
-    b.push_u16(0xFFFF); b.push_u16(0x0082); // STATIC
-    b.push_u16(0xFFFF); b.push_u16(103); // IDI_WARNING
+    b.push_u16(0xFFFF);
+    b.push_u16(0x0082); // STATIC
+    b.push_u16(0xFFFF);
+    b.push_u16(103); // IDI_WARNING
     b.push_u16(0);
 
     // Control 2: Message text
     b.align4();
     b.push_u32(WS_CHILD | WS_VISIBLE);
     b.push_u32(0);
-    b.push_i16(50); b.push_i16(10); b.push_i16(240); b.push_i16(55);
+    b.push_i16(50);
+    b.push_i16(10);
+    b.push_i16(240);
+    b.push_i16(55);
     b.push_u16(0);
-    b.push_u16(0xFFFF); b.push_u16(0x0082); // STATIC
+    b.push_u16(0xFFFF);
+    b.push_u16(0x0082); // STATIC
     b.push_str16(msg);
     b.push_u16(0);
 
@@ -666,9 +716,13 @@ fn show_unavailable_dialog(msg: &str) -> isize {
     b.align4();
     b.push_u32(WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON);
     b.push_u32(0);
-    b.push_i16(145); b.push_i16(80); b.push_i16(60); b.push_i16(20);
+    b.push_i16(145);
+    b.push_i16(80);
+    b.push_i16(60);
+    b.push_i16(20);
     b.push_u16(IDOK);
-    b.push_u16(0xFFFF); b.push_u16(0x0080); // BUTTON
+    b.push_u16(0xFFFF);
+    b.push_u16(0x0080); // BUTTON
     b.push_str16("确定");
     b.push_u16(0);
 
@@ -676,9 +730,13 @@ fn show_unavailable_dialog(msg: &str) -> isize {
     b.align4();
     b.push_u32(WS_CHILD | WS_VISIBLE | WS_TABSTOP);
     b.push_u32(0);
-    b.push_i16(210); b.push_i16(80); b.push_i16(75); b.push_i16(20);
+    b.push_i16(210);
+    b.push_i16(80);
+    b.push_i16(75);
+    b.push_i16(20);
     b.push_u16(IDSUPPRESS);
-    b.push_u16(0xFFFF); b.push_u16(0x0080); // BUTTON
+    b.push_u16(0xFFFF);
+    b.push_u16(0x0080); // BUTTON
     b.push_str16("不再提醒");
     b.push_u16(0);
 
@@ -790,7 +848,9 @@ mod tests {
         let env = TestEnv::new();
         let watcher = env.watcher();
 
-        let rgba: Vec<u8> = vec![255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255];
+        let rgba: Vec<u8> = vec![
+            255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
+        ];
         let result = watcher.poll_with_data(2, 2, &rgba);
 
         assert!(result.is_some(), "首次应该保存为新图片");
@@ -800,7 +860,12 @@ mod tests {
             .unwrap()
             .filter(|e| {
                 e.as_ref()
-                    .map(|e| e.file_name().to_str().map(|n| n.starts_with("clip_")).unwrap_or(false))
+                    .map(|e| {
+                        e.file_name()
+                            .to_str()
+                            .map(|n| n.starts_with("clip_"))
+                            .unwrap_or(false)
+                    })
                     .unwrap_or(false)
             })
             .count();
@@ -823,7 +888,12 @@ mod tests {
             .unwrap()
             .filter(|e| {
                 e.as_ref()
-                    .map(|e| e.file_name().to_str().map(|n| n.starts_with("clip_")).unwrap_or(false))
+                    .map(|e| {
+                        e.file_name()
+                            .to_str()
+                            .map(|n| n.starts_with("clip_"))
+                            .unwrap_or(false)
+                    })
                     .unwrap_or(false)
             })
             .count();
@@ -846,7 +916,12 @@ mod tests {
             .unwrap()
             .filter(|e| {
                 e.as_ref()
-                    .map(|e| e.file_name().to_str().map(|n| n.starts_with("clip_")).unwrap_or(false))
+                    .map(|e| {
+                        e.file_name()
+                            .to_str()
+                            .map(|n| n.starts_with("clip_"))
+                            .unwrap_or(false)
+                    })
                     .unwrap_or(false)
             })
             .count();
@@ -934,7 +1009,15 @@ mod tests {
         let days = local_secs / 86400;
         let tod = local_secs % 86400;
         let (y, mo, d) = crate::clipboard::days_to_ymd(days as i64);
-        let ts = format!("{:04}{:02}{:02}_{:02}{:02}{:02}000", y, mo, d, tod/3600, (tod%3600)/60, tod%60);
+        let ts = format!(
+            "{:04}{:02}{:02}_{:02}{:02}{:02}000",
+            y,
+            mo,
+            d,
+            tod / 3600,
+            (tod % 3600) / 60,
+            tod % 60
+        );
         let new_path = clip_dir.join(format!("clip_{}.png", ts));
         let img2 = RgbaImage::from_pixel(10, 10, Rgba([0, 255, 0, 255]));
         img2.save_with_format(&new_path, ImageFormat::Png).unwrap();
@@ -1027,7 +1110,12 @@ mod tests {
             .unwrap()
             .filter(|e| {
                 e.as_ref()
-                    .map(|e| e.file_name().to_str().map(|n| n.starts_with("clip_")).unwrap_or(false))
+                    .map(|e| {
+                        e.file_name()
+                            .to_str()
+                            .map(|n| n.starts_with("clip_"))
+                            .unwrap_or(false)
+                    })
                     .unwrap_or(false)
             })
             .count();
@@ -1225,7 +1313,15 @@ mod tests {
         let days = local_secs / 86400;
         let tod = local_secs % 86400;
         let (y, mo, d) = days_to_ymd(days as i64);
-        let ts = format!("{:04}{:02}{:02}_{:02}{:02}{:02}", y, mo, d, tod/3600, (tod%3600)/60, tod%60);
+        let ts = format!(
+            "{:04}{:02}{:02}_{:02}{:02}{:02}",
+            y,
+            mo,
+            d,
+            tod / 3600,
+            (tod % 3600) / 60,
+            tod % 60
+        );
         let new_path = clip_dir.join(format!("clip_{}.png", ts));
         fs::write(&new_path, b"new format old ts").unwrap();
 
@@ -1252,9 +1348,15 @@ mod tests {
         let now = std::time::SystemTime::now();
         let secs = now.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 8 * 3600;
         let (y, mo, d) = days_to_ymd((secs / 86400) as i64);
-        let ts = format!("{:04}{:02}{:02}_{:02}{:02}{:02}456",
-            y, mo, d,
-            (secs % 86400) / 3600, ((secs % 86400) % 3600) / 60, (secs % 86400) % 60);
+        let ts = format!(
+            "{:04}{:02}{:02}_{:02}{:02}{:02}456",
+            y,
+            mo,
+            d,
+            (secs % 86400) / 3600,
+            ((secs % 86400) % 3600) / 60,
+            (secs % 86400) % 60
+        );
         fs::write(clip_dir.join(format!("clip_{}.md", ts)), b"recent").unwrap();
 
         let watcher = env.watcher();

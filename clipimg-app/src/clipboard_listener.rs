@@ -18,8 +18,8 @@ use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, PostThreadMessageW,
-    RegisterClassW, TranslateMessage, HWND_MESSAGE, MSG, WM_CLIPBOARDUPDATE, WM_DESTROY,
-    WM_QUIT, WNDCLASSW,
+    RegisterClassW, TranslateMessage, HWND_MESSAGE, MSG, WM_CLIPBOARDUPDATE, WM_DESTROY, WM_QUIT,
+    WNDCLASSW,
 };
 
 /// thread_local 存储主线程 ID 和通知消息 ID，供 wnd_proc 回调使用
@@ -133,10 +133,7 @@ fn listener_main(ready_tx: std::sync::mpsc::Sender<u32>) {
         };
 
         if RegisterClassW(&wnd_class) == 0 {
-            log::error!(
-                "RegisterClassW 失败: {}",
-                std::io::Error::last_os_error()
-            );
+            log::error!("RegisterClassW 失败: {}", std::io::Error::last_os_error());
             return;
         }
 
@@ -157,10 +154,7 @@ fn listener_main(ready_tx: std::sync::mpsc::Sender<u32>) {
         );
 
         if hwnd.is_null() {
-            log::error!(
-                "CreateWindowExW 失败: {}",
-                std::io::Error::last_os_error()
-            );
+            log::error!("CreateWindowExW 失败: {}", std::io::Error::last_os_error());
             return;
         }
 

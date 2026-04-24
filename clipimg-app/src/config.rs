@@ -1,13 +1,27 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-fn default_max_history_hours() -> u32 { 1 }
-fn default_max_log_size_mb() -> u32 { 1 }
-fn default_max_copy_size_mb() -> u32 { 10 }
-fn default_max_copy_files() -> u32 { 10 }
-fn default_preview_hotkey() -> String { "Ctrl+Alt+P".to_string() }
-fn default_blocked_preview_ext() -> Vec<String> { Vec::new() }
-fn default_show_startup_notification() -> bool { true }
+fn default_max_history_hours() -> u32 {
+    1
+}
+fn default_max_log_size_mb() -> u32 {
+    1
+}
+fn default_max_copy_size_mb() -> u32 {
+    10
+}
+fn default_max_copy_files() -> u32 {
+    10
+}
+fn default_preview_hotkey() -> String {
+    "Ctrl+Alt+P".to_string()
+}
+fn default_blocked_preview_ext() -> Vec<String> {
+    Vec::new()
+}
+fn default_show_startup_notification() -> bool {
+    true
+}
 
 /// 应用配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,7 +76,7 @@ impl Default for AppConfig {
 
 impl AppConfig {
     /// 从文件加载配置，文件不存在则创建默认配置
-    pub fn load(config_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn load(config_path: &Path) -> Result<Self, String> {
         if !config_path.exists() {
             let config = Self::default();
             config.save(config_path)?;
@@ -70,23 +84,27 @@ impl AppConfig {
             return Ok(config);
         }
 
-        let content = std::fs::read_to_string(config_path)?;
+        let content = desktop_config::read_to_string(config_path)?;
 
         // 旧配置兼容：处理废弃字段和格式变化
         let migrated = Self::migrate_config(&content);
         let content_to_parse = if migrated != content {
-            std::fs::write(config_path, &migrated)?;
+            desktop_config::write_string(config_path, &migrated)?;
             log::info!("配置文件已自动迁移: {}", config_path.display());
             migrated
         } else {
             content
         };
 
-        let mut config: Self = serde_json::from_str(&content_to_parse)?;
+        let mut config: Self = serde_json::from_str(&content_to_parse)
+            .map_err(|err| format!("配置文件解析失败: {}", err))?;
 
         // 旧配置兼容：output_path 从文件级截断为目录级
         if config.output_path.ends_with("/latest.png") {
-            let truncated = config.output_path.trim_end_matches("/latest.png").to_string();
+            let truncated = config
+                .output_path
+                .trim_end_matches("/latest.png")
+                .to_string();
             log::warn!(
                 "output_path 已从文件级自动截断为目录级: {} → {}",
                 config.output_path,
@@ -122,7 +140,11 @@ impl AppConfig {
             if !obj.contains_key("max_history_hours") {
                 if let Some(days) = obj.remove("max_history_days").and_then(|v| v.as_u64()) {
                     let hours = days * 24;
-                    log::warn!("max_history_days ({}) 已迁移为 max_history_hours ({})", days, hours);
+                    log::warn!(
+                        "max_history_days ({}) 已迁移为 max_history_hours ({})",
+                        days,
+                        hours
+                    );
                     obj.insert("max_history_hours".to_string(), serde_json::json!(hours));
                     changed = true;
                 }
@@ -134,7 +156,10 @@ impl AppConfig {
                 changed = true;
             }
             if !obj.contains_key("preview_hotkey") {
-                obj.insert("preview_hotkey".to_string(), serde_json::json!("Ctrl+Alt+P"));
+                obj.insert(
+                    "preview_hotkey".to_string(),
+                    serde_json::json!("Ctrl+Alt+P"),
+                );
                 changed = true;
             }
             if !obj.contains_key("blocked_preview_ext") {
@@ -142,7 +167,10 @@ impl AppConfig {
                 changed = true;
             }
             if !obj.contains_key("show_startup_notification") {
-                obj.insert("show_startup_notification".to_string(), serde_json::json!(true));
+                obj.insert(
+                    "show_startup_notification".to_string(),
+                    serde_json::json!(true),
+                );
                 changed = true;
             }
 
@@ -162,13 +190,8 @@ impl AppConfig {
     }
 
     /// 保存配置到文件
-    pub fn save(&self, config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let content = serde_json::to_string_pretty(self)?;
-        std::fs::write(config_path, content)?;
-        Ok(())
+    pub fn save(&self, config_path: &Path) -> Result<(), String> {
+        desktop_config::save_pretty_json(config_path, self)
     }
 
     /// 校验配置合法性
@@ -202,28 +225,18 @@ impl AppConfig {
     /// 相对路径基于 EXE 所在目录
     pub fn resolved_save_dir(&self, exe_dir: &Path) -> PathBuf {
         let save = Path::new(&self.save_dir);
-        if save.is_absolute() || is_windows_absolute(&self.save_dir) {
+        if save.is_absolute() || desktop_config::is_windows_absolute(&self.save_dir) {
             save.to_path_buf()
         } else {
             exe_dir.join(&self.save_dir)
         }
     }
-
-}
-
-/// 检测 Windows 风格绝对路径（如 C:\、E:\）或 UNC 路径（如 \\wsl$\...）
-fn is_windows_absolute(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    if bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/') {
-        return true;
-    }
-    // UNC 路径：\\server\share...
-    bytes.starts_with(b"\\\\")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use desktop_config::is_windows_absolute;
     use std::fs;
 
     fn temp_dir() -> tempfile::TempDir {
@@ -332,8 +345,14 @@ mod tests {
             output_path: "/workspace/.clip".to_string(),
             ..Default::default()
         };
-        assert_eq!(config.container_path_for("clip_20260416_103000123.png"), "/workspace/.clip/clip_20260416_103000123.png");
-        assert_eq!(config.container_path_for("clip_20260416_103500456.pdf"), "/workspace/.clip/clip_20260416_103500456.pdf");
+        assert_eq!(
+            config.container_path_for("clip_20260416_103000123.png"),
+            "/workspace/.clip/clip_20260416_103000123.png"
+        );
+        assert_eq!(
+            config.container_path_for("clip_20260416_103500456.pdf"),
+            "/workspace/.clip/clip_20260416_103500456.pdf"
+        );
     }
 
     #[test]
@@ -342,7 +361,10 @@ mod tests {
             output_path: "/workspace/.clip/".to_string(),
             ..Default::default()
         };
-        assert_eq!(config.container_path_for("clip_20260416_103000123.png"), "/workspace/.clip/clip_20260416_103000123.png");
+        assert_eq!(
+            config.container_path_for("clip_20260416_103000123.png"),
+            "/workspace/.clip/clip_20260416_103000123.png"
+        );
     }
 
     #[test]
@@ -440,7 +462,9 @@ mod tests {
     #[test]
     fn test_is_windows_absolute_unc() {
         assert!(is_windows_absolute("\\\\wsl$\\debian\\home\\user\\.clip"));
-        assert!(is_windows_absolute("\\\\wsl.localhost\\debian\\home\\user\\.clip"));
+        assert!(is_windows_absolute(
+            "\\\\wsl.localhost\\debian\\home\\user\\.clip"
+        ));
         assert!(is_windows_absolute("C:\\Users\\test"));
         assert!(!is_windows_absolute(".clip"));
         assert!(!is_windows_absolute("/home/user/.clip"));
