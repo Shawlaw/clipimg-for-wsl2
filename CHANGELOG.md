@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## v1.0.12
 
 - **新增 debug 构建模式**：`cargo xwin build --features debug_build --release --bin clipimg_debug` 编译 `clipimg_debug.exe`，启动时自动终止 release 版本进程，托盘显示 `(debug)` 标记，方便迭代测试
+- **release 自动清理 debug 版本**：启动时检测并终止同目录下的 `clipimg_debug.exe` 进程后删除文件，实现测试闭环
 
 ## v1.0.11
 
