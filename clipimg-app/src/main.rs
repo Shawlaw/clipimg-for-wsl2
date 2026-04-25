@@ -85,6 +85,13 @@ fn run_app() {
             if let Some(dir) = exe.parent() {
                 let debug_exe = dir.join("clipimg_debug.exe");
                 if debug_exe.exists() {
+                    use std::os::windows::process::CommandExt;
+                    const CREATE_NO_WINDOW: u32 = 0x08000000;
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/IM", "clipimg_debug.exe", "/F"])
+                        .creation_flags(CREATE_NO_WINDOW)
+                        .output();
+                    std::thread::sleep(std::time::Duration::from_millis(500));
                     let _ = std::fs::remove_file(&debug_exe);
                 }
             }
