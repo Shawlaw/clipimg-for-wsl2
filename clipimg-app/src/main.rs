@@ -59,16 +59,30 @@ fn run_app() {
     use tray_icon::TrayIconBuilder;
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, GetMessageW, PostQuitMessage, RegisterWindowMessageW, TranslateMessage,
-        MSG,
+        DispatchMessageW, GetMessageW, PeekMessageW, PostQuitMessage, RegisterWindowMessageW,
+        TranslateMessage, MSG, PM_REMOVE, WM_QUIT,
     };
 
     // --console 模式：附加控制台用于看日志输出
     let console_mode = is_console_mode();
 
+    // debug 构建模式：启动时终止正在运行的 release 版本
+    #[cfg(feature = "debug_build")]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/IM", "clipimg.exe", "/F"])
+            .output();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
     // 多实例防护：创建命名互斥体，已存在则退出
     {
-        let mutex_name: Vec<u16> = OsStr::new("Global\\clipimg")
+        let mutex_name_str = if cfg!(feature = "debug_build") {
+            "Global\\clipimg_debug"
+        } else {
+            "Global\\clipimg"
+        };
+        let mutex_name: Vec<u16> = OsStr::new(mutex_name_str)
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
@@ -255,10 +269,20 @@ fn run_app() {
     );
 
     // 系统托盘菜单
-    let mode_label = if config.borrow().is_hotkey_mode() {
-        format!("clipImg v{} [{}]", version, config.borrow().hotkey)
+    let debug_tag = if cfg!(feature = "debug_build") {
+        " (debug)"
     } else {
-        format!("clipImg v{} [剪贴板模式]", version)
+        ""
+    };
+    let mode_label = if config.borrow().is_hotkey_mode() {
+        format!(
+            "clipImg v{}{} [{}]",
+            version,
+            debug_tag,
+            config.borrow().hotkey
+        )
+    } else {
+        format!("clipImg v{}{} [剪贴板模式]", version, debug_tag)
     };
 
     let tray_menu = Menu::new();
@@ -393,7 +417,7 @@ fn run_app() {
     // 用 500ms 冷却期跳过自身触发的通知
     let mut last_self_set_time: Option<std::time::Instant> = None;
     loop {
-        // GetMessageW 阻塞等待，无消息时线程休眠 → 零 CPU
+        // 先用 GetMessageW 阻塞等待，无消息时线程休眠 → 零 CPU
         let ret = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
         if ret == 0 {
             // WM_QUIT
@@ -616,10 +640,20 @@ fn run_app() {
             }
         }
 
-        // 分发消息给各组件的内部窗口过程（tray-icon、global-hotkey 等）
+        // 分发当前消息 + 排空队列中所有待处理消息
+        // muda/tray-icon 等组件通过窗口过程接收 Win32 消息后 post 到 crossbeam channel，
+        // 需要确保一轮循环内所有挂起消息都被 Dispatch，菜单事件才能被 try_recv 取到
         unsafe {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
+            while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                if msg.message == WM_QUIT {
+                    PostQuitMessage(msg.wParam as _);
+                    break;
+                }
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
         }
     }
 
