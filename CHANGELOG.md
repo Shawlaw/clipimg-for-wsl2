@@ -4,8 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## v1.0.12
 
-- **托盘菜单点击响应优化**：消息循环增加 PeekMessageW 排空队列，减少菜单事件延迟
-- **新增 debug 构建模式**：`cargo xwin build --features debug_build --bin clipimg_debug` 编译 `clipimg_debug.exe`，启动时自动终止 release 版本进程，托盘显示 `(debug)` 标记，方便迭代测试
+- **新增 debug 构建模式**：`cargo xwin build --features debug_build --release --bin clipimg_debug` 编译 `clipimg_debug.exe`，启动时自动终止 release 版本进程，托盘显示 `(debug)` 标记，方便迭代测试
 
 ## v1.0.11
 

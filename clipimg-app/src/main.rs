@@ -59,8 +59,8 @@ fn run_app() {
     use tray_icon::TrayIconBuilder;
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, GetMessageW, PeekMessageW, PostQuitMessage, RegisterWindowMessageW,
-        TranslateMessage, MSG, PM_REMOVE, WM_QUIT,
+        DispatchMessageW, GetMessageW, PostQuitMessage, RegisterWindowMessageW, TranslateMessage,
+        MSG,
     };
 
     // --console 模式：附加控制台用于看日志输出
@@ -69,8 +69,11 @@ fn run_app() {
     // debug 构建模式：启动时终止正在运行的 release 版本
     #[cfg(feature = "debug_build")]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
         let _ = std::process::Command::new("taskkill")
             .args(["/IM", "clipimg.exe", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
@@ -640,20 +643,10 @@ fn run_app() {
             }
         }
 
-        // 分发当前消息 + 排空队列中所有待处理消息
-        // muda/tray-icon 等组件通过窗口过程接收 Win32 消息后 post 到 crossbeam channel，
-        // 需要确保一轮循环内所有挂起消息都被 Dispatch，菜单事件才能被 try_recv 取到
+        // 分发消息给各组件的内部窗口过程（tray-icon、global-hotkey 等）
         unsafe {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
-            while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
-                if msg.message == WM_QUIT {
-                    PostQuitMessage(msg.wParam as _);
-                    break;
-                }
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
         }
     }
 
@@ -1141,10 +1134,16 @@ fn is_autostart_enabled() -> bool {
         return false;
     }
 
-    let char_len = (buf_len as usize / 2).saturating_sub(1);
-    let stored = String::from_utf16_lossy(&buf[..char_len]);
-    let exe_str = exe_path.to_string_lossy();
-    stored.contains(exe_str.as_ref())
+    if cfg!(feature = "debug_build") {
+        // debug 版本只检查注册表是否存在 clipImg 值，
+        // 不比较 exe 路径（操作的是 release 版本的自启项）
+        true
+    } else {
+        let char_len = (buf_len as usize / 2).saturating_sub(1);
+        let stored = String::from_utf16_lossy(&buf[..char_len]);
+        let exe_str = exe_path.to_string_lossy();
+        stored.contains(exe_str.as_ref())
+    }
 }
 
 #[cfg(target_os = "windows")]
