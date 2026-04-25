@@ -81,6 +81,14 @@ Windows (clipImg)                Remote Server
 - HTTP 文件服务器 + SSH 反向隧道：需要手动配置 tunnel，且依赖 agent 支持 HTTP fetch，兼容性差
 - 手动 SCP：用户操作成本高，不符合 clipImg 零摩擦哲学
 
+### 17. 托盘菜单"打开目录"快捷操作
+
+**现状**：clipImg 是便携单文件 EXE，用户下载新版后需要手动找到程序位置覆盖替换，但没有快捷入口定位 EXE 所在目录或配置目录。
+
+**思路**：
+- 托盘菜单新增"打开程序目录"（用 `explorer.exe` 打开 EXE 所在目录），方便用户下载新版后覆盖替换
+- 实现成本极低：`std::current_exe()` 获取路径，`explorer.exe /select,<exe_path>` 打开并选中
+
 ### 10. 便携模式 vs 安装模式区分
 
 **现状**：配置和日志都在 EXE 旁边的 `.clip` 目录，属于便携模式。如果用户放到 Program Files 下，可能没有写入权限。
@@ -106,4 +114,5 @@ Windows (clipImg)                Remote Server
 | P1 | 12. SmartScreen 拦截 | 影响首次使用体验 | 待实现 | | |
 | P2 | 15. 国际化（i18n） | 扩展非中文用户群 | 待实现 | | |
 | P1 | 16. SSH 使用模式（SFTP 上传） | 扩展 SSH 远程使用场景 | 待实现 | | |
+| P2 | 17. 托盘菜单"打开目录"快捷操作 | 方便用户更新和手动改配置 | 待实现 | | |
 | P3 | 10. 便携/安装模式 | 边缘场景 | 待实现 | | |
