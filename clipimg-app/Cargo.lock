@@ -196,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "clipimg"
-version = "1.0.10"
+version = "1.0.11"
 dependencies = [
  "arboard",
  "desktop-config",

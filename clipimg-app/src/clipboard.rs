@@ -462,10 +462,6 @@ fn date_to_days(y: u32, m: u32, d: u32) -> u32 {
     let y = y as u64;
     let m = m as u64;
     let d = d as u64;
-    // 算法：将月份调整为从3月开始（3月=1, 4月=2, ..., 2月=12）
-    let a = (m as i64 + 9) % 12;
-    let ya = y - (a as u64 / 10 | 0); // 等价于除以10后取整
-    let ya = if a < 0 { ya - 1 } else { ya };
     // 使用更简单的方法
     let mut total_days = 0u64;
     for yr in 1..y {
