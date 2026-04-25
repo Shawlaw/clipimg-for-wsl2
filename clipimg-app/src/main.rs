@@ -582,7 +582,7 @@ fn run_app() {
                     let _ = desktop_fs::open_path(&dir);
                 }
                 "open_exe_dir" => {
-                    if let Ok(exe) = std::current_exe() {
+                    if let Ok(exe) = std::env::current_exe() {
                         if let Some(dir) = exe.parent() {
                             let _ = desktop_fs::open_path(dir);
                         }
