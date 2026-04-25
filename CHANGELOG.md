@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v1.0.11
+
+- **托盘菜单新增"打开程序目录"**：方便用户下载新版后快速定位 EXE 所在目录覆盖替换
+
 ## v1.0.10
 
 - 切换公共基础能力到公开的 [DeskFoundry](https://github.com/Shawlaw/DeskFoundry) monorepo GitHub 依赖

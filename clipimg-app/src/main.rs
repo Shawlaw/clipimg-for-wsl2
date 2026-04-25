@@ -276,6 +276,7 @@ fn run_app() {
     let open_config = MenuItem::with_id("open_config", "打开配置文件", true, None);
     let reload_config = MenuItem::with_id("reload_config", "重新加载配置", true, None);
     let open_dir = MenuItem::with_id("open_dir", "打开图片目录", true, None);
+    let open_exe_dir = MenuItem::with_id("open_exe_dir", "打开程序目录", true, None);
     let homepage = MenuItem::with_id("homepage", "项目主页", true, None);
     let autostart_item =
         CheckMenuItem::with_id("autostart", "开机自启", true, autostart_enabled, None);
@@ -290,6 +291,7 @@ fn run_app() {
             &open_config,
             &reload_config,
             &open_dir,
+            &open_exe_dir,
             &homepage,
             &PredefinedMenuItem::separator(),
             &autostart_item,
@@ -578,6 +580,13 @@ fn run_app() {
                 "open_dir" => {
                     let dir = config.borrow().resolved_save_dir(&exe_dir);
                     let _ = desktop_fs::open_path(&dir);
+                }
+                "open_exe_dir" => {
+                    if let Ok(exe) = std::current_exe() {
+                        if let Some(dir) = exe.parent() {
+                            let _ = desktop_fs::open_path(dir);
+                        }
+                    }
                 }
                 "homepage" => {
                     let _ = std::process::Command::new("cmd")
