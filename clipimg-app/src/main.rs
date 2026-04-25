@@ -78,6 +78,19 @@ fn run_app() {
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
 
+    // release 模式：启动时清理同目录下的 debug 版本
+    #[cfg(not(feature = "debug_build"))]
+    {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let debug_exe = dir.join("clipimg_debug.exe");
+                if debug_exe.exists() {
+                    let _ = std::fs::remove_file(&debug_exe);
+                }
+            }
+        }
+    }
+
     // 多实例防护：创建命名互斥体，已存在则退出
     {
         let mutex_name_str = if cfg!(feature = "debug_build") {
