@@ -69,25 +69,58 @@ END
     let rc = std::env::var("RC")
         .ok()
         .or_else(|| which("llvm-rc"))
-        .or_else(|| which("llvm-rc-20"));
+        .or_else(|| which("llvm-rc-20"))
+        .or_else(|| find_windows_sdk_rc());
 
     let rc = match rc {
         Some(rc) => rc,
         None => {
-            println!("cargo:warning=未找到资源编译器 (llvm-rc)，跳过图标嵌入");
+            println!("cargo:warning=未找到资源编译器 (llvm-rc / rc.exe)，跳过图标嵌入");
             return;
         }
     };
 
     let res_path = format!("{}/resource.res", out_dir);
 
-    let status = std::process::Command::new(&rc)
-        .arg("-no-preprocess")
-        .arg(&rc_path)
-        .arg("/FO")
-        .arg(&res_path)
-        .status()
-        .expect("无法运行资源编译器");
+    // 判断是否为 Windows SDK 的 rc.exe（llvm-rc 用 -no-preprocess，rc.exe 用 /Fo）
+    let is_msvc_rc = rc.to_lowercase().ends_with("rc.exe")
+        && !rc.to_lowercase().contains("llvm");
+
+    let status = if is_msvc_rc {
+        // MSVC rc.exe 语法: rc /fo output.res input.rc
+        // 用绝对路径重写 .rc 文件中的图标引用（去掉 \\?\ 前缀）
+        let icon_abs = std::path::Path::new("icons/icon.ico")
+            .canonicalize()
+            .unwrap_or_else(|_| std::path::PathBuf::from("icons/icon.ico"));
+        let icon_str = icon_abs.to_string_lossy();
+        // 去掉 \\?\ UNC 前缀，rc.exe 不认识
+        let icon_clean = icon_str
+            .trim_start_matches(r"\\?\")
+            .to_string();
+        let rc_content_abs = rc_content.replace("\"icons/icon.ico\"", &format!("\"{}\"", icon_clean));
+        std::fs::write(&rc_path, &rc_content_abs).expect("无法写入 .rc 文件");
+
+        let result = std::process::Command::new(&rc)
+            .arg("/fo")
+            .arg(&res_path)
+            .arg(&rc_path)
+            .output()
+            .expect("无法运行资源编译器");
+        if !result.status.success() {
+            println!("cargo:warning=rc.exe 失败: {}", String::from_utf8_lossy(&result.stderr));
+            println!("cargo:warning=rc.exe stdout: {}", String::from_utf8_lossy(&result.stdout));
+        }
+        result.status
+    } else {
+        // llvm-rc 语法
+        std::process::Command::new(&rc)
+            .arg("-no-preprocess")
+            .arg(&rc_path)
+            .arg("/FO")
+            .arg(&res_path)
+            .status()
+            .expect("无法运行资源编译器")
+    };
 
     if status.success() {
         println!("cargo:rustc-link-arg={}", res_path);
@@ -147,4 +180,43 @@ fn which(name: &str) -> Option<String> {
                 None
             }
         })
+}
+
+/// 在 Windows SDK 目录中查找 rc.exe（Windows 原生编译时使用）
+fn find_windows_sdk_rc() -> Option<String> {
+    let sdk_base = std::path::Path::new(r"C:\Program Files (x86)\Windows Kits\10\bin");
+    if !sdk_base.exists() {
+        return None;
+    }
+
+    let mut versions: Vec<String> = std::fs::read_dir(&sdk_base)
+        .ok()?
+        .filter_map(|e| {
+            let name = e.ok()?.file_name();
+            let name = name.to_string_lossy().to_string();
+            if name.starts_with("10.") {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+    versions.sort();
+    versions.reverse(); // 最新版本优先
+
+    // 优先使用 x64，回退到 x86
+    let arches = ["x64", "x86"];
+
+    for ver in &versions {
+        for arch in &arches {
+            let rc_path = sdk_base.join(ver).join(arch).join("rc.exe");
+            if rc_path.exists() {
+                let path = rc_path.to_string_lossy().to_string();
+                println!("cargo:warning=找到 Windows SDK 资源编译器: {}", path);
+                return Some(path);
+            }
+        }
+    }
+
+    None
 }

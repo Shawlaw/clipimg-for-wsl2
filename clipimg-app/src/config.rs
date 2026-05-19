@@ -22,6 +22,9 @@ fn default_blocked_preview_ext() -> Vec<String> {
 fn default_show_startup_notification() -> bool {
     true
 }
+fn default_wsl2_path_conversion() -> bool {
+    true
+}
 
 /// 应用配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +58,9 @@ pub struct AppConfig {
     /// 启动时是否显示提示弹窗
     #[serde(default = "default_show_startup_notification")]
     pub show_startup_notification: bool,
+    /// 是否启用 WSL2 路径转化（关闭后剪贴板使用 Windows 原生路径）
+    #[serde(default = "default_wsl2_path_conversion")]
+    pub wsl2_path_conversion: bool,
 }
 
 impl Default for AppConfig {
@@ -70,6 +76,7 @@ impl Default for AppConfig {
             preview_hotkey: "Ctrl+Alt+P".to_string(),
             blocked_preview_ext: Vec::new(),
             show_startup_notification: true,
+            wsl2_path_conversion: true,
         }
     }
 }
@@ -179,6 +186,12 @@ impl AppConfig {
                 obj.insert("max_copy_files".to_string(), serde_json::json!(10));
                 changed = true;
             }
+
+            // 补充 v1.0.13 新字段
+            if !obj.contains_key("wsl2_path_conversion") {
+                obj.insert("wsl2_path_conversion".to_string(), serde_json::json!(true));
+                changed = true;
+            }
         }
 
         if changed {
@@ -219,6 +232,16 @@ impl AppConfig {
     /// 即 `output_path/filename`
     pub fn container_path_for(&self, filename: &str) -> String {
         format!("{}/{}", self.output_dir(), filename)
+    }
+
+    /// 给定文件名，返回剪贴板文本路径
+    /// wsl2_path_conversion 启用时返回容器侧路径，否则返回 Windows 原生路径
+    pub fn clipboard_text_path(&self, filename: &str, win_path: &std::path::Path) -> String {
+        if self.wsl2_path_conversion {
+            self.container_path_for(filename)
+        } else {
+            win_path.to_string_lossy().to_string()
+        }
     }
 
     /// 解析 save_dir 为绝对路径

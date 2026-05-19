@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v1.0.13
+
+- **托盘菜单新增"WSL2 路径转化"开关**：支持从托盘菜单一键关闭 WSL2 路径转化功能。关闭后剪贴板中的文本路径改为 Windows 原生路径（如 `C:\Users\foo\.clip\xxx.png`），方便在非 WSL2 环境（如 PowerShell 原生终端）中使用 AgentCLI。开关状态持久化到配置文件，重启后保留
+
 ## v1.0.12
 
 - **新增 debug 构建模式**：`cargo xwin build --features debug_build --release --bin clipimg_debug` 编译 `clipimg_debug.exe`，启动时自动终止 release 版本进程，托盘显示 `(debug)` 标记，方便迭代测试

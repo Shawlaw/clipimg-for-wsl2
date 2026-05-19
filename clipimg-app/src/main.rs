@@ -327,6 +327,13 @@ fn run_app() {
     let homepage = MenuItem::with_id("homepage", "项目主页", true, None);
     let autostart_item =
         CheckMenuItem::with_id("autostart", "开机自启", true, autostart_enabled, None);
+    let wsl2_path_item = CheckMenuItem::with_id(
+        "wsl2_path",
+        "WSL2 路径转化",
+        true,
+        config.borrow().wsl2_path_conversion,
+        None,
+    );
     let quit_item = MenuItem::with_id("quit", "退出", true, None);
 
     tray_menu
@@ -342,6 +349,7 @@ fn run_app() {
             &homepage,
             &PredefinedMenuItem::separator(),
             &autostart_item,
+            &wsl2_path_item,
             &PredefinedMenuItem::separator(),
             &quit_item,
         ])
@@ -486,6 +494,7 @@ fn run_app() {
                                     &files,
                                     &saved_names,
                                     &config.borrow(),
+                                    &save_dir,
                                 );
                                 // 判断是否有 PNG（用于 CF_DIB）
                                 let first_saved = save_dir.join(&saved_names[0]);
@@ -536,11 +545,13 @@ fn run_app() {
                                 let save_dir = watcher.borrow().save_dir.clone();
                                 let win_path = save_dir.join(&saved_name);
                                 if win_path.exists() {
-                                    let container_path =
-                                        config.borrow().container_path_for(&saved_name);
                                     log::info!("设置多格式剪贴板...");
-                                    // 截图路径也追加空行
-                                    let text_path = format!("{}\n", container_path);
+                                    let text_path = format!(
+                                        "{}\n",
+                                        config
+                                            .borrow()
+                                            .clipboard_text_path(&saved_name, &win_path)
+                                    );
                                     match input::set_multi_format_clipboard(&text_path, &win_path) {
                                         Ok(()) => {
                                             last_self_set_time = Some(std::time::Instant::now());
@@ -585,12 +596,12 @@ fn run_app() {
                         log::warn!("没有最新文件，请先复制文件或截图");
                     }
                 } else if is_input {
-                    // 输入热键：发送最新 clip_* 的容器路径
+                    // 输入热键：发送最新 clip_* 的路径
                     log::info!("热键触发: {}", config.borrow().hotkey);
-                    if let Some((_disk_path, name)) = watcher.borrow().find_latest_clip() {
-                        let container_path = config.borrow().container_path_for(&name);
-                        log::info!("发送路径: {}", container_path);
-                        match input::send_text_with_ime(&container_path) {
+                    if let Some((disk_path, name)) = watcher.borrow().find_latest_clip() {
+                        let text_path = config.borrow().clipboard_text_path(&name, &disk_path);
+                        log::info!("发送路径: {}", text_path);
+                        match input::send_text_with_ime(&text_path) {
                             Ok(()) => log::info!("路径已发送"),
                             Err(e) => log::error!("发送文本失败: {}", e),
                         }
@@ -651,6 +662,23 @@ fn run_app() {
                         } else {
                             "已禁用"
                         }
+                    );
+                }
+                "wsl2_path" => {
+                    let new_val = !config.borrow().wsl2_path_conversion;
+                    config.borrow_mut().wsl2_path_conversion = new_val;
+                    // 同步 watcher 内部 config 副本
+                    watcher.borrow_mut().config.wsl2_path_conversion = new_val;
+                    wsl2_path_item.set_checked(new_val);
+                    if let Err(e) = config.borrow().save(&config_path) {
+                        log::error!("保存配置失败: {}", e);
+                    }
+                    // 刷新剪贴板中的文本路径
+                    let save_dir = watcher.borrow().save_dir.clone();
+                    refresh_clipboard_text_paths(&mut clipboard, &config.borrow(), &save_dir);
+                    log::info!(
+                        "WSL2 路径转化: {}",
+                        if new_val { "已启用" } else { "已关闭" }
                     );
                 }
                 "quit" => {
@@ -1253,19 +1281,74 @@ fn remove_autostart() {
     }
 }
 
+/// 从路径字符串中提取 clip_ 文件名
+/// 输入如 "/home/user/.clip/clip_20260419_100000123.png" 或 "C:\Users\foo\.clip\clip_20260419_100000123.png"
+/// 返回 "clip_20260419_100000123.png"
+fn extract_clip_filename(path: &str) -> Option<String> {
+    let normalized = path.replace('\\', "/");
+    let filename = normalized.rsplit('/').next()?;
+    if filename.starts_with("clip_") && filename.contains('.') {
+        Some(filename.to_string())
+    } else {
+        None
+    }
+}
+
+/// 切换 WSL2 路径转化后，刷新剪贴板中的文本路径
+/// 如果当前剪贴板文本包含 clip_ 文件名路径，则按新格式重建并写回
+#[cfg(target_os = "windows")]
+fn refresh_clipboard_text_paths(
+    clipboard: &mut arboard::Clipboard,
+    config: &config::AppConfig,
+    save_dir: &std::path::Path,
+) {
+    let text = match clipboard.get_text() {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+
+    let mut changed = false;
+    let mut new_text = String::new();
+
+    for line in text.lines() {
+        if let Some(filename) = extract_clip_filename(line) {
+            let win_path = save_dir.join(&filename);
+            let new_path = config.clipboard_text_path(&filename, &win_path);
+            new_text.push_str(&new_path);
+            new_text.push('\n');
+            changed = true;
+        } else {
+            new_text.push_str(line);
+            new_text.push('\n');
+        }
+    }
+
+    if changed {
+        match clipboard.set_text(&new_text) {
+            Ok(()) => log::info!("剪贴板路径已刷新为{}格式", if config.wsl2_path_conversion { "WSL2" } else { "Windows" }),
+            Err(e) => log::warn!("刷新剪贴板路径失败: {}", e),
+        }
+    }
+}
+
 /// 文件复制场景下构建剪贴板参数
 ///
-/// 不变式：CF_UNICODETEXT 使用容器侧路径（.clip 下的文件名），
-/// CF_HDROP 使用源文件路径（用户在资源管理器中复制的原始文件）。
-/// 这样在资源管理器粘贴时得到的是源文件，而不是 .clip 目录下的副本。
+/// 不变式：CF_HDROP 使用源文件路径（用户在资源管理器中复制的原始文件）。
+/// CF_UNICODETEXT 在 WSL2 模式下使用容器侧路径，否则使用 Windows 原生路径。
 fn build_file_clipboard_params(
     source_files: &[std::path::PathBuf],
     saved_names: &[String],
     config: &config::AppConfig,
+    save_dir: &std::path::Path,
 ) -> (String, Vec<std::path::PathBuf>) {
     let mut text_paths = String::new();
     for name in saved_names {
-        text_paths.push_str(&config.container_path_for(name));
+        if config.wsl2_path_conversion {
+            text_paths.push_str(&config.container_path_for(name));
+        } else {
+            let win_path = save_dir.join(name);
+            text_paths.push_str(&win_path.to_string_lossy());
+        }
         text_paths.push('\n');
     }
     // CF_HDROP 指向源文件，而非 .clip 副本
@@ -1301,8 +1384,10 @@ mod tests {
     fn test_hdrop_uses_source_files_not_clip_copies() {
         let config = AppConfig {
             output_path: "/workspace/.clip".to_string(),
+            wsl2_path_conversion: true,
             ..Default::default()
         };
+        let save_dir = PathBuf::from(r"C:\Users\test\.clip");
 
         let source_files = vec![
             PathBuf::from(r"C:\Users\test\photo.png"),
@@ -1314,9 +1399,9 @@ mod tests {
         ];
 
         let (text_paths, hdrop_paths) =
-            super::build_file_clipboard_params(&source_files, &saved_names, &config);
+            super::build_file_clipboard_params(&source_files, &saved_names, &config, &save_dir);
 
-        // CF_UNICODETEXT 使用容器路径
+        // CF_UNICODETEXT 使用容器路径（WSL2 模式）
         assert!(text_paths.contains("/workspace/.clip/clip_20260419_100000123.png"));
         assert!(text_paths.contains("/workspace/.clip/clip_20260419_100000456.pdf"));
 
@@ -1329,16 +1414,64 @@ mod tests {
     fn test_hdrop_single_file_uses_source() {
         let config = AppConfig {
             output_path: "/home/user/.clip".to_string(),
+            wsl2_path_conversion: true,
             ..Default::default()
         };
+        let save_dir = PathBuf::from(r"D:\screenshots\.clip");
 
         let source_files = vec![PathBuf::from(r"D:\screenshots\shot.png")];
         let saved_names = vec!["clip_20260419_120000789.png".to_string()];
 
         let (text_paths, hdrop_paths) =
-            super::build_file_clipboard_params(&source_files, &saved_names, &config);
+            super::build_file_clipboard_params(&source_files, &saved_names, &config, &save_dir);
 
         assert!(text_paths.contains("/home/user/.clip/clip_20260419_120000789.png"));
         assert_eq!(hdrop_paths[0], PathBuf::from(r"D:\screenshots\shot.png"));
+    }
+
+    /// 关闭 WSL2 路径转化时，文本路径应为 Windows 原生路径
+    #[test]
+    fn test_hdrop_windows_path_when_wsl2_disabled() {
+        let config = AppConfig {
+            output_path: "/workspace/.clip".to_string(),
+            wsl2_path_conversion: false,
+            ..Default::default()
+        };
+        let save_dir = PathBuf::from(r"C:\Users\test\.clip");
+
+        let source_files = vec![PathBuf::from(r"C:\Users\test\photo.png")];
+        let saved_names = vec!["clip_20260419_100000123.png".to_string()];
+
+        let (text_paths, hdrop_paths) =
+            super::build_file_clipboard_params(&source_files, &saved_names, &config, &save_dir);
+
+        // CF_UNICODETEXT 使用 Windows 原生路径
+        assert!(text_paths.contains(r"C:\Users\test\.clip\clip_20260419_100000123.png"));
+        assert!(!text_paths.contains("/workspace/.clip"));
+
+        // CF_HDROP 仍然指向源文件
+        assert_eq!(hdrop_paths[0], PathBuf::from(r"C:\Users\test\photo.png"));
+    }
+
+    #[test]
+    fn test_extract_clip_filename_wsl2() {
+        assert_eq!(
+            super::extract_clip_filename("/home/user/.clip/clip_20260419_100000123.png"),
+            Some("clip_20260419_100000123.png".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_clip_filename_windows() {
+        assert_eq!(
+            super::extract_clip_filename(r"C:\Users\foo\.clip\clip_20260419_100000123.png"),
+            Some("clip_20260419_100000123.png".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_clip_filename_non_clip() {
+        assert_eq!(super::extract_clip_filename("some random text"), None);
+        assert_eq!(super::extract_clip_filename("/home/user/readme.md"), None);
     }
 }
