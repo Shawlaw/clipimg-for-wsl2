@@ -16,7 +16,7 @@
 - **双模式输入**：
   - **剪贴板模式**（默认）：截图后自动设置多格式剪贴板，Ctrl+V / Shift+Insert 直接粘贴路径
   - **热键模式**：按自定义热键自动输入路径，不碰剪贴板
-- **系统托盘**：右键菜单可打开配置/日志、打开图片目录、开机自启开关、退出
+- **系统托盘**：右键菜单可打开配置/日志、打开图片目录、开机自启开关、WSL2 路径转化开关、退出
 - **连续粘贴**：每次截图/复制产生唯一文件（`clip_<timestamp>.<ext>`），不再覆盖，支持连续粘贴多张图
 - **文件复制**：支持从资源管理器 Ctrl+C 复制文件（含多文件），自动保存并设置剪贴板路径
 - **预览快捷键**：按快捷键（默认 `Ctrl+Alt+P`）用系统默认程序打开最新文件
@@ -51,7 +51,8 @@
   "max_copy_files": 10,
   "preview_hotkey": "Ctrl+Alt+P",
   "blocked_preview_ext": [],
-  "show_startup_notification": true
+  "show_startup_notification": true,
+  "wsl2_path_conversion": true
 }
 ```
 
@@ -83,6 +84,7 @@
 | `preview_hotkey` | `"Ctrl+Alt+P"` | 预览快捷键，打开最新文件。空字符串 `""` 关闭预览功能 |
 | `blocked_preview_ext` | `[]` | 预览时拦截的文件后缀名列表（与内置黑名单取并集），如 `["dll", "reg"]` |
 | `show_startup_notification` | `true` | 启动时是否显示提示弹窗 |
+| `wsl2_path_conversion` | `true` | 是否将剪贴板文本路径转化为 WSL2 格式。`true` 使用容器侧路径（如 `/workspace/.clip/clip_xxx.png`），`false` 使用 Windows 原生路径（如 `C:\Users\foo\.clip\clip_xxx.png`）。也可通过托盘菜单一键切换 |
 
 **两个路径的关系：`save_dir` 是 Windows 文件系统上的实际写入位置，`output_path` 是 WSL/Docker 容器内能识别的路径，两者通过目录挂载映射到同一个物理文件。**
 

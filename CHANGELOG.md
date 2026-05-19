@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 ## v1.0.13
 
 - **托盘菜单新增"WSL2 路径转化"开关**：支持从托盘菜单一键关闭 WSL2 路径转化功能。关闭后剪贴板中的文本路径改为 Windows 原生路径（如 `C:\Users\foo\.clip\xxx.png`），方便在非 WSL2 环境（如 PowerShell 原生终端）中使用 AgentCLI。开关状态持久化到配置文件，重启后保留
+- **切换开关自动刷新剪贴板**：切换 WSL2 路径转化开关时，如果当前剪贴板文本包含 clip_ 路径，自动替换为新格式的路径
+- **修复 Windows 本地编译无图标**：build.rs 新增 Windows SDK `rc.exe` 自动查找，在 Windows 上直接 `cargo build --release` 编译的 EXE 也能正确嵌入图标和版本信息
 
 ## v1.0.12
 

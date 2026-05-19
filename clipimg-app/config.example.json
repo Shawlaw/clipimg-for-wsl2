@@ -7,5 +7,6 @@
   "max_copy_size_mb": 10,
   "preview_hotkey": "Ctrl+Alt+P",
   "blocked_preview_ext": [],
-  "show_startup_notification": true
+  "show_startup_notification": true,
+  "wsl2_path_conversion": true
 }
